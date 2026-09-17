@@ -139,7 +139,7 @@
 
       // NOTE: confirm the exact field name Noah returns for the session
       // URL (e.g. data.onboarding.Url) once we test against sandbox.
-      const onboardingUrl = data.onboarding.Url || data.onboarding.OnboardingUrl;
+      const onboardingUrl = data.onboarding.HostedURL;
 
       const container = document.getElementById("noah-iframe-container");
       container.innerHTML = "";
