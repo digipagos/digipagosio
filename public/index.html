@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="es">
+<html lang="en">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Verificación de Identidad | DigiPagos</title>
+<title>Identity Verification | DigiPagos</title>
 <style>
   :root {
     --cyan: #00ADDE;
@@ -83,24 +83,26 @@
 </header>
 
 <main>
-  <h1>Verifica tu identidad</h1>
-  <p class="subtitle">Este paso es necesario antes de procesar tu primer pago.</p>
+  <h1>Verify your identity</h1>
+  <p class="subtitle">This step is required before we can process your first payment.</p>
 
   <div class="card">
     <!--
       Required disclosure per Noah Partner Agreement (Clause 4.3.2.1):
       the exact wording below must be shown to the customer before they
       proceed. Do not shorten or omit this box.
+      NOTE (Daniel): confirm with Noah whether they have an official
+      English-language version of this disclosure before using this
+      translation in production.
     -->
     <div class="terms-box">
-      <strong>Aviso importante:</strong> Reconoces que estos servicios regulados
-      son provistos directamente a ti por <strong>Noah</strong> y su(s) socio(s)
-      bancario(s). Al hacer clic en "Continuar" dentro del formulario,
-      confirmas que has leído, entendido, y aceptas los términos
-      correspondientes.
+      <strong>Important notice:</strong> You acknowledge that these regulated
+      services are provided directly to you by <strong>Noah</strong> and its
+      banking partner(s). By clicking "Continue" within the form, you confirm
+      that you have read, understood, and agree to the applicable terms.
     </div>
     <div id="noah-iframe-container">
-      <div class="loading" id="loading-msg">Cargando formulario de verificación…</div>
+      <div class="loading" id="loading-msg">Loading verification form…</div>
     </div>
   </div>
 </main>
@@ -131,7 +133,7 @@
 
       if (!res.ok || !data.ok) {
         document.getElementById("loading-msg").textContent =
-          "No pudimos cargar el formulario. Intenta de nuevo en unos minutos.";
+          "We couldn't load the form. Please try again in a few minutes.";
         return;
       }
 
@@ -147,7 +149,7 @@
       container.appendChild(iframe);
     } catch (err) {
       document.getElementById("loading-msg").textContent =
-        "Ocurrió un error. Por favor intenta de nuevo.";
+        "An error occurred. Please try again.";
       console.error(err);
     }
   }
