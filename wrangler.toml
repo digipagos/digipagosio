@@ -6,7 +6,7 @@ compatibility_date = "2026-09-15"
 # Create with: wrangler kv:namespace create "DIGIPAGOS_CUSTOMERS"
 # then paste the returned id below.
 kv_namespaces = [
-  { binding = "DIGIPAGOS_CUSTOMERS", id = "REPLACE_WITH_KV_NAMESPACE_ID" }
+     { binding = "DIGIPAGOS_CUSTOMERS", id = "eafcd6e1b8a3433a9d2bede7da868230" }
 ]
 
 # Static assets: serves everything in ./public automatically
