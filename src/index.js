@@ -153,8 +153,6 @@ async function handleCreateOnboardingSession(request, env) {
     return jsonResponse({ error: "noah_error", details: noahData }, noahRes.status);
   }
 
-  const onboardingUrl = noahData.Url || noahData.OnboardingUrl;
-
   return jsonResponse({ ok: true, onboarding: noahData });
 }
 
