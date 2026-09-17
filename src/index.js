@@ -8,12 +8,11 @@
  *  - Basic merchant record storage in KV (mirrors the MERCHANTS pattern
  *    used in the prdigipagos-worker for Triple-A)
  *
- * ENV VARS EXPECTED (set as Worker secrets):
- *  - NOAH_API_KEY        -> X-Api-Key header for all Noah API calls
- *  - NOAH_API_BASE        (optional override; defaults to sandbox below)
- *  - NOAH_WEBHOOK_SECRET  -> shared secret Noah signs webhook payloads with
- *                            (confirm exact header/verification method with
- *                            Noah's team before going to production)
+ * ENV VARS EXPECTED:
+ *  - NOAH_API_KEY            (secret) -> X-Api-Key header for all Noah API calls
+ *  - NOAH_API_BASE           (var)    -> defaults to sandbox below
+ *  - NOAH_WEBHOOK_PUBLIC_KEY (var)    -> Noah's public key, used to verify
+ *                                        incoming webhook signatures
  *
  * KV NAMESPACE EXPECTED:
  *  - DIGIPAGOS_CUSTOMERS  -> maps our internal customer/merchant IDs to
@@ -75,10 +74,6 @@ export default {
 async function handleCreateCustomer(request, env) {
   const body = await request.json();
 
-  // Expecting our own merchant to POST minimal info about their end
-  // customer (the investor / payer being onboarded), e.g.:
-  // { internalCustomerId, type: "Individual" | "Business", ...fields }
-
   const { internalCustomerId, type } = body;
   if (!internalCustomerId || !type) {
     return jsonResponse(
@@ -89,9 +84,6 @@ async function handleCreateCustomer(request, env) {
 
   const noahBase = env.NOAH_API_BASE || NOAH_API_BASE_DEFAULT;
 
-  // NOTE: exact payload shape depends on Type (Individual vs Business) —
-  // see Noah docs (PUT /v1/customers/:CustomerID). Passing through
-  // whatever fields the caller supplied beyond our two required ones.
   const noahPayload = { Type: type, ...body.fields };
 
   const noahRes = await fetch(`${noahBase}/customers/${encodeURIComponent(internalCustomerId)}`, {
@@ -109,7 +101,6 @@ async function handleCreateCustomer(request, env) {
     return jsonResponse({ error: "noah_error", details: noahData }, noahRes.status);
   }
 
-  // Persist mapping in KV
   if (env.DIGIPAGOS_CUSTOMERS) {
     await env.DIGIPAGOS_CUSTOMERS.put(
       `customer:${internalCustomerId}`,
@@ -162,9 +153,8 @@ async function handleCreateOnboardingSession(request, env) {
     return jsonResponse({ error: "noah_error", details: noahData }, noahRes.status);
   }
 
-  // noahData is expected to include the hosted onboarding URL — the
-  // exact field name should be confirmed against Noah's live response
-  // (commonly something like `Url` or `OnboardingUrl`).
+  const onboardingUrl = noahData.Url || noahData.OnboardingUrl;
+
   return jsonResponse({ ok: true, onboarding: noahData });
 }
 
@@ -174,13 +164,28 @@ async function handleCreateOnboardingSession(request, env) {
 async function handleNoahWebhook(request, env) {
   const rawBody = await request.text();
 
-  // TODO: confirm Noah's actual webhook signing/verification method
-  // (header name + algorithm) with their technical team before
-  // production. Placeholder check below assumes a shared-secret
-  // header for illustration only — DO NOT rely on this as-is.
-  const signatureHeader = request.headers.get("X-Noah-Signature");
-  if (env.NOAH_WEBHOOK_SECRET && !signatureHeader) {
-    console.warn("Webhook received without expected signature header");
+  // Noah signs every webhook with ITS OWN private key (ECDSA P-384 /
+  // SHA-384) and sends the signature in the "Webhook-Signature" header
+  // (base64). We verify it using Noah's PUBLIC key (not a secret —
+  // safe to keep in wrangler.toml as a plain var). See:
+  // https://docs.noah.com/api-concepts/webhooks/configuration
+  const signatureHeader = request.headers.get("Webhook-Signature");
+
+  if (!signatureHeader) {
+    console.warn("Webhook received without Webhook-Signature header");
+    return jsonResponse({ error: "missing_signature" }, 401);
+  }
+
+  const publicKeyPem = env.NOAH_WEBHOOK_PUBLIC_KEY;
+  if (!publicKeyPem) {
+    console.error("NOAH_WEBHOOK_PUBLIC_KEY is not configured");
+    return jsonResponse({ error: "server_misconfigured" }, 500);
+  }
+
+  const isValid = await verifyNoahSignature(rawBody, signatureHeader, publicKeyPem);
+  if (!isValid) {
+    console.warn("Webhook signature verification failed");
+    return jsonResponse({ error: "invalid_signature" }, 401);
   }
 
   let event;
@@ -192,13 +197,11 @@ async function handleNoahWebhook(request, env) {
 
   console.log("Noah webhook received:", JSON.stringify(event));
 
-  // Example: update KV record when a Transaction status changes
   if (event?.Transaction?.ID && env.DIGIPAGOS_CUSTOMERS) {
     const key = `transaction:${event.Transaction.ID}`;
     await env.DIGIPAGOS_CUSTOMERS.put(key, JSON.stringify(event.Transaction));
   }
 
-  // Always acknowledge quickly so Noah doesn't retry unnecessarily
   return jsonResponse({ received: true });
 }
 
@@ -229,7 +232,7 @@ function jsonResponse(obj, status = 200) {
     status,
     headers: {
       "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": "*", // tighten to digipagos.io before prod
+      "Access-Control-Allow-Origin": "*",
     },
   });
 }
@@ -243,6 +246,86 @@ function corsResponse() {
       "Access-Control-Allow-Headers": "Content-Type",
     },
   });
+}
+
+/* ------------------------------------------------------------------ */
+/*  Noah webhook signature verification (ECDSA P-384 / SHA-384)        */
+/*  Docs: https://docs.noah.com/api-concepts/webhooks/configuration    */
+/* ------------------------------------------------------------------ */
+async function verifyNoahSignature(rawBody, signatureHeaderB64, publicKeyPem) {
+  try {
+    const keyData = pemToArrayBuffer(publicKeyPem);
+    const publicKey = await crypto.subtle.importKey(
+      "spki",
+      keyData,
+      { name: "ECDSA", namedCurve: "P-384" },
+      false,
+      ["verify"]
+    );
+
+    const derSignature = base64ToBytes(signatureHeaderB64);
+    const rawSignature = derToRawEcdsaSignature(derSignature, 48);
+
+    const bodyBytes = new TextEncoder().encode(rawBody);
+
+    return await crypto.subtle.verify(
+      { name: "ECDSA", hash: "SHA-384" },
+      publicKey,
+      rawSignature,
+      bodyBytes
+    );
+  } catch (err) {
+    console.error("Signature verification error:", err);
+    return false;
+  }
+}
+
+function pemToArrayBuffer(pem) {
+  const b64 = pem
+    .replace(/-----BEGIN PUBLIC KEY-----/, "")
+    .replace(/-----END PUBLIC KEY-----/, "")
+    .replace(/\s+/g, "");
+  return base64ToBytes(b64).buffer;
+}
+
+function base64ToBytes(b64) {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+function derToRawEcdsaSignature(der, componentSize) {
+  let offset = 0;
+  if (der[offset++] !== 0x30) throw new Error("Invalid DER signature (no SEQUENCE)");
+
+  let seqLen = der[offset++];
+  if (seqLen & 0x80) {
+    offset += seqLen & 0x7f;
+  }
+
+  function readInt() {
+    if (der[offset++] !== 0x02) throw new Error("Invalid DER signature (no INTEGER)");
+    let len = der[offset++];
+    let bytes = der.slice(offset, offset + len);
+    offset += len;
+    while (bytes.length > 1 && bytes[0] === 0) bytes = bytes.slice(1);
+    return bytes;
+  }
+
+  const r = readInt();
+  const s = readInt();
+
+  function pad(bytes) {
+    const out = new Uint8Array(componentSize);
+    out.set(bytes, componentSize - bytes.length);
+    return out;
+  }
+
+  const raw = new Uint8Array(componentSize * 2);
+  raw.set(pad(r), 0);
+  raw.set(pad(s), componentSize);
+  return raw;
 }
 
 async function safeJson(res) {
