@@ -1,0 +1,29 @@
+name = "digipagosio"
+main = "src/index.js"
+compatibility_date = "2026-09-15"
+
+# KV namespace for storing customer/transaction records.
+# Create with: wrangler kv:namespace create "DIGIPAGOS_CUSTOMERS"
+# then paste the returned id below.
+kv_namespaces = [
+  { binding = "DIGIPAGOS_CUSTOMERS", id = "REPLACE_WITH_KV_NAMESPACE_ID" }
+]
+
+# Static assets: serves everything in ./public automatically
+# (index.html, /assets/logo.png, etc.) for any request that isn't
+# handled by our own routes below (/api/*).
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+# Secrets (set via `wrangler secret put <NAME>`, do NOT put real values here):
+#   NOAH_API_KEY
+#   NOAH_WEBHOOK_SECRET
+#
+# Optional var (safe to keep in this file since it's not sensitive):
+[vars]
+NOAH_API_BASE = "https://api.sandbox.noah.com/v1"
+
+# Once the domain is purchased, connect via the Cloudflare dashboard:
+# Workers & Pages > digipagosio > Settings > Domains & Routes > Add Custom Domain
+# (same approach used for digipagos.us — do NOT use a manual CNAME record)

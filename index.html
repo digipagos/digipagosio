@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Verificación de Identidad | DigiPagos</title>
+<style>
+  :root {
+    --cyan: #00ADDE;
+    --black: #0A0A0A;
+    --gray: #5A5A5A;
+    --light-gray: #F4F7F9;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--light-gray);
+    color: var(--black);
+  }
+  header {
+    background: var(--black);
+    padding: 18px 24px;
+    display: flex;
+    align-items: center;
+  }
+  header img { height: 32px; }
+  main {
+    max-width: 640px;
+    margin: 32px auto;
+    padding: 0 20px;
+  }
+  h1 {
+    font-size: 1.3rem;
+    margin-bottom: 4px;
+  }
+  p.subtitle {
+    color: var(--gray);
+    margin-top: 0;
+    margin-bottom: 20px;
+  }
+  .card {
+    background: #fff;
+    border-radius: 10px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    overflow: hidden;
+  }
+  #noah-iframe-container {
+    width: 100%;
+    min-height: 640px;
+  }
+  #noah-iframe-container iframe {
+    width: 100%;
+    height: 640px;
+    border: none;
+  }
+  .terms-box {
+    background: var(--light-gray);
+    border-top: 1px solid #E1E7EA;
+    padding: 16px 20px;
+    font-size: 0.82rem;
+    color: var(--gray);
+    line-height: 1.4;
+  }
+  .terms-box strong { color: var(--black); }
+  .loading {
+    padding: 60px 20px;
+    text-align: center;
+    color: var(--gray);
+  }
+  footer {
+    text-align: center;
+    color: #B7C1CA;
+    font-size: 0.75rem;
+    padding: 30px 0;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <img src="/assets/logo.png" alt="DigiPagos" />
+</header>
+
+<main>
+  <h1>Verifica tu identidad</h1>
+  <p class="subtitle">Este paso es necesario antes de procesar tu primer pago.</p>
+
+  <div class="card">
+    <!--
+      Required disclosure per Noah Partner Agreement (Clause 4.3.2.1):
+      the exact wording below must be shown to the customer before they
+      proceed. Do not shorten or omit this box.
+    -->
+    <div class="terms-box">
+      <strong>Aviso importante:</strong> Reconoces que estos servicios regulados
+      son provistos directamente a ti por <strong>Noah</strong> y su(s) socio(s)
+      bancario(s). Al hacer clic en "Continuar" dentro del formulario,
+      confirmas que has leído, entendido, y aceptas los términos
+      correspondientes.
+    </div>
+    <div id="noah-iframe-container">
+      <div class="loading" id="loading-msg">Cargando formulario de verificación…</div>
+    </div>
+  </div>
+</main>
+
+<footer>DigiPagos — Fast. Secure. Borderless.</footer>
+
+<script>
+  // 1. Ask our own Worker to create the Noah onboarding session for this
+  //    customer, then embed the returned URL in an iframe.
+  //    `internalCustomerId` should come from your app's session/auth —
+  //    placeholder below for illustration.
+  async function loadOnboarding() {
+    const params = new URLSearchParams(window.location.search);
+    const internalCustomerId = params.get("cid") || "demo-customer-001";
+
+    try {
+      const res = await fetch("/api/noah/onboarding-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          internalCustomerId,
+          returnUrl: window.location.origin + "/onboarding-complete",
+          fiatCurrency: "USD",
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || !data.ok) {
+        document.getElementById("loading-msg").textContent =
+          "No pudimos cargar el formulario. Intenta de nuevo en unos minutos.";
+        return;
+      }
+
+      // NOTE: confirm the exact field name Noah returns for the session
+      // URL (e.g. data.onboarding.Url) once we test against sandbox.
+      const onboardingUrl = data.onboarding.Url || data.onboarding.OnboardingUrl;
+
+      const container = document.getElementById("noah-iframe-container");
+      container.innerHTML = "";
+      const iframe = document.createElement("iframe");
+      iframe.src = onboardingUrl;
+      iframe.allow = "camera; microphone"; // needed for identity verification (photo/liveness)
+      container.appendChild(iframe);
+    } catch (err) {
+      document.getElementById("loading-msg").textContent =
+        "Ocurrió un error. Por favor intenta de nuevo.";
+      console.error(err);
+    }
+  }
+
+  loadOnboarding();
+</script>
+
+</body>
+</html>
