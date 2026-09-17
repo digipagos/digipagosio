@@ -6,7 +6,7 @@ compatibility_date = "2026-09-15"
 # Create with: wrangler kv:namespace create "DIGIPAGOS_CUSTOMERS"
 # then paste the returned id below.
 kv_namespaces = [
-     { binding = "DIGIPAGOS_CUSTOMERS", id = "eafcd6e1b8a3433a9d2bede7da868230" }
+  { binding = "DIGIPAGOS_CUSTOMERS", id = "eafcd6e1b8a3433a9d2bede7da868230" }
 ]
 
 # Static assets: serves everything in ./public automatically
@@ -16,14 +16,22 @@ kv_namespaces = [
 directory = "./public"
 binding = "ASSETS"
 
-# Secrets (set via `wrangler secret put <NAME>`, do NOT put real values here):
+# Secrets (set via the Cloudflare dashboard or `wrangler secret put <NAME>`,
+# do NOT put real values here):
 #   NOAH_API_KEY
-#   NOAH_WEBHOOK_SECRET
 #
-# Optional var (safe to keep in this file since it's not sensitive):
+# Vars below are NOT secret — NOAH_API_BASE is just a URL, and
+# NOAH_WEBHOOK_PUBLIC_KEY is Noah's own public key (published in their
+# docs) used to verify that incoming webhooks really came from Noah.
+# This is the SANDBOX key. Swap for the production key from
+# https://docs.noah.com/api-concepts/webhooks/configuration before
+# going live.
 [vars]
 NOAH_API_BASE = "https://api.sandbox.noah.com/v1"
-
-# Once the domain is purchased, connect via the Cloudflare dashboard:
-# Workers & Pages > digipagosio > Settings > Domains & Routes > Add Custom Domain
-# (same approach used for digipagos.us — do NOT use a manual CNAME record)
+NOAH_WEBHOOK_PUBLIC_KEY = """
+-----BEGIN PUBLIC KEY-----
+MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEm8yBiD+kmVJ1Xc9sfRkDx0yo9+u8yiAD
+PngI20KoEswz0gflp8o/z66Abqz/m9A1CBecixWdeT72pA8NZBJI6L6Osd8RV+yx
+QArxeGKEVX/2QNrfPqeAKODHT5LdStGT
+-----END PUBLIC KEY-----
+"""
