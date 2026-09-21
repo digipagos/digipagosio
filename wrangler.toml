@@ -15,6 +15,10 @@ kv_namespaces = [
 [assets]
 directory = "./public"
 binding = "ASSETS"
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = ["/api/*", "/"]
 
 # Secrets (set via the Cloudflare dashboard or `wrangler secret put <NAME>`,
 # do NOT put real values here):
