@@ -9,9 +9,6 @@ kv_namespaces = [
 
 # Static assets: serves everything in ./public. The Worker runs first for
 # /api/* and for the site root (/), which redirects to signup or dashboard.
-[assets]
-directory = "./public"
-binding = "ASSETS"
 run_worker_first = ["/api/*", "/"]
 
 # Keep Workers Logs enabled (needed to see Noah webhook events).
