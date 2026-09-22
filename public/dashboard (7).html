@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Dashboard | DigiPagos</title>
+<style>
+  :root {
+    --cyan: #00ADDE;
+    --cyan-soft: #E6F7FC;
+    --cyan-mid: #0096C2;
+    --black: #0A0A0A;
+    --ink: #121417;
+    --gray: #5A6570;
+    --muted: #8A95A1;
+    --line: #E4EAEF;
+    --light-gray: #F3F6F8;
+    --white: #FFFFFF;
+    --success: #0F7B4B;
+    --success-bg: #E8F7F0;
+    --warn: #8A5A00;
+    --warn-bg: #FFF6E5;
+    --error: #C0392B;
+    --shadow: 0 8px 28px rgba(10, 16, 24, 0.08);
+    --radius: 16px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background:
+      radial-gradient(1200px 400px at 10% -10%, rgba(0,173,222,0.10), transparent 50%),
+      radial-gradient(900px 360px at 100% 0%, rgba(0,173,222,0.06), transparent 45%),
+      var(--light-gray);
+    color: var(--ink);
+    line-height: 1.45;
+  }
+  header {
+    background: var(--black);
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    border-bottom: 1px solid #1c1c1c;
+  }
+  header img { height: 32px; }
+  header button {
+    background: transparent;
+    border: 1px solid #3a3a3a;
+    color: #fff;
+    padding: 8px 14px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.85rem;
+  }
+  header button:hover { border-color: #666; }
+  main { max-width: 720px; margin: 28px auto 40px; padding: 0 20px; }
+  .page-head { margin-bottom: 18px; }
+  h1 { font-size: 1.45rem; margin: 0 0 6px; letter-spacing: -0.02em; }
+  p.subtitle { color: var(--gray); margin: 0; font-size: 0.95rem; }
+  .noncustodial-banner {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    background: var(--warn-bg);
+    border: 1px solid #F0D7A0;
+    color: #5C4300;
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin-bottom: 18px;
+    font-size: 0.88rem;
+  }
+  .noncustodial-banner strong { display: block; margin-bottom: 2px; color: #3F2E00; }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--cyan-soft);
+    color: var(--cyan-mid);
+    font-size: 0.72rem;
+    font-weight: 650;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 4px 8px;
+    border-radius: 999px;
+    margin-bottom: 10px;
+  }
+  .card {
+    background: var(--white);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    border: 1px solid rgba(228, 234, 239, 0.9);
+    padding: 22px 24px 20px;
+    margin-bottom: 18px;
+  }
+  .card h2 {
+    font-size: 1.02rem;
+    margin: 0 0 6px;
+    letter-spacing: -0.01em;
+  }
+  .hint {
+    color: var(--gray);
+    font-size: 0.84rem;
+    margin: 0 0 16px;
+  }
+  .balance-row {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  #balance-display {
+    font-size: 2.15rem;
+    font-weight: 750;
+    letter-spacing: -0.03em;
+    margin: 2px 0 8px;
+  }
+  .legal-note {
+    background: var(--light-gray);
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-size: 0.8rem;
+    color: var(--gray);
+    margin: 0;
+  }
+  .compliance-box {
+    background: var(--light-gray);
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-size: 0.8rem;
+    color: var(--gray);
+    margin: 0 0 16px;
+  }
+  .compliance-box strong { display: block; color: var(--ink); margin-bottom: 2px; }
+  label {
+    display: block;
+    font-size: 0.82rem;
+    color: var(--gray);
+    margin-bottom: 6px;
+    font-weight: 550;
+  }
+  input, select {
+    width: 100%;
+    padding: 11px 12px;
+    border: 1px solid #D5DCE1;
+    border-radius: 10px;
+    font-size: 1rem;
+    margin-bottom: 14px;
+    background: #fff;
+    color: var(--ink);
+  }
+  input:focus, select:focus {
+    outline: none;
+    border-color: var(--cyan);
+    box-shadow: 0 0 0 3px rgba(0,173,222,0.15);
+  }
+  .attest {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    font-size: 0.8rem;
+    color: var(--gray);
+    margin: 0 0 14px;
+  }
+  .attest input { width: auto; margin: 3px 0 0; }
+  button.primary {
+    width: 100%;
+    padding: 13px 20px;
+    background: var(--black);
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    font-size: 1rem;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  button.primary:hover { background: #1a1a1a; }
+  button.primary:disabled { opacity: 0.6; cursor: default; }
+  button.secondary {
+    width: 100%;
+    padding: 11px 20px;
+    background: #fff;
+    color: var(--ink);
+    border: 1px solid #D5DCE1;
+    border-radius: 10px;
+    font-size: 0.92rem;
+    cursor: pointer;
+    font-weight: 600;
+    margin-top: 4px;
+  }
+  button.secondary:hover { border-color: var(--cyan); }
+  button.secondary:disabled { opacity: 0.6; cursor: default; }
+  #payment-result, #payout-result, #send-payment-result, #recipient-result {
+    margin-top: 12px;
+    padding: 14px;
+    background: var(--success-bg);
+    border: 1px solid #C7EBDA;
+    color: #145C3A;
+    border-radius: 10px;
+    font-size: 0.9rem;
+    word-break: break-all;
+    display: none;
+  }
+  #payment-result a, #payout-result a { color: var(--cyan-mid); }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th, td { text-align: left; padding: 10px 6px; border-bottom: 1px solid #EEF1F3; }
+  th { color: var(--muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  #empty-tx { color: var(--gray); font-size: 0.9rem; margin: 8px 0 0; }
+  #error-msg, #payout-error-msg, #recipient-error-msg, #send-payment-error-msg {
+    color: var(--error);
+    font-size: 0.85rem;
+    margin-bottom: 12px;
+    display: none;
+  }
+  .status {
+    display: inline-block;
+    padding: 3px 8px;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    background: #EEF1F3;
+  }
+  .status.settled { background: var(--success-bg); color: var(--success); }
+  .status.pending { background: var(--warn-bg); color: var(--warn); }
+  .status.failed { background: #FDECEC; color: var(--error); }
+  .divider {
+    border: none;
+    border-top: 1px solid var(--line);
+    margin: 18px 0;
+  }
+  footer {
+    text-align: center;
+    color: #8A95A1;
+    font-size: 0.75rem;
+    padding: 8px 20px 36px;
+    max-width: 720px;
+    margin: 0 auto;
+    line-height: 1.55;
+  }
+  footer strong { color: #6B7680; }
+</style>
+</head>
+<body>
+
+<header>
+  <img src="/assets/logo.png" alt="DigiPagos" />
+  <button id="logout-btn">Log out</button>
+</header>
+
+<main>
+  <div class="page-head">
+    <h1 id="welcome">Dashboard</h1>
+    <p class="subtitle" id="verification-note">Non-custodial payments dashboard. DigiPagos never holds your funds.</p>
+  </div>
+
+  <div class="noncustodial-banner" role="note">
+    <div>
+      <strong>Non-custodial service</strong>
+      DigiPagos is not a bank, EMI, wallet, escrow, or money transmitter balance sheet. We only generate payment and withdrawal links and forward instructions. Customer payments, conversions, custody (if any), and payouts are processed, held, and executed by Noah under Noah's terms, KYC/KYB, AML, and banking partners. DigiPagos cannot freeze, seize, reverse, or release funds. Settlement timing and banking decisions are Noah's.
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge">Estimate only · not a wallet</span>
+    <h2>Estimated activity</h2>
+    <div class="balance-row">
+      <p id="balance-display">$0.00</p>
+    </div>
+    <p class="legal-note">
+      This figure is DigiPagos' own estimate based on settled transaction records returned by Noah.
+      It is <strong>not</strong> a live wallet, stored balance, deposit account, or amount held by DigiPagos.
+      Do not treat it as funds available for withdrawal until Noah marks the related transaction Settled.
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>Request a payment</h2>
+    <p class="hint">
+      Create a hosted checkout link. Your customer pays Noah directly. DigiPagos does not collect, store, or take custody of the payment.
+    </p>
+    <p id="error-msg"></p>
+    <form id="payment-form">
+      <label for="pay-method">Your customer pays with</label>
+      <select id="pay-method">
+        <option value="fiat">Bank / card (fiat)</option>
+        <option value="crypto">Crypto (USDC)</option>
+      </select>
+
+      <div id="pay-fiat-fields">
+        <label for="pay-currency">Currency your customer pays in</label>
+        <select id="pay-currency">
+          <option value="USD">🇺🇸 USD — US Dollar</option>
+          <option value="EUR">🇪🇺 EUR — Euro</option>
+          <option value="GBP">🇬🇧 GBP — British Pound</option>
+          <option value="MXN">🇲🇽 MXN — Mexican Peso</option>
+          <option value="COP">🇨🇴 COP — Colombian Peso</option>
+          <option value="DOP">🇩🇴 DOP — Dominican Peso</option>
+          <option value="BRL">🇧🇷 BRL — Brazilian Real</option>
+          <option value="CAD">🇨🇦 CAD — Canadian Dollar</option>
+        </select>
+
+        <label for="pay-method-category">Payment method</label>
+        <select id="pay-method-category">
+          <option value="Bank">Bank transfer</option>
+          <option value="Card">Card</option>
+        </select>
+      </div>
+
+      <label for="amount">Amount</label>
+      <input type="number" id="amount" min="1" step="0.01" required />
+      <button type="submit" class="primary" id="pay-btn">Create payment link</button>
+    </form>
+    <div id="payment-result"></div>
+  </div>
+
+  <div class="card">
+    <h2>Withdraw to your bank account</h2>
+    <p class="hint">
+      Start a withdrawal on Noah's hosted page. You enter your own bank details there.
+      DigiPagos never receives those details and never holds the payout.
+    </p>
+    <p id="payout-error-msg"></p>
+    <form id="payout-form">
+      <label for="payout-currency">Currency to receive</label>
+      <select id="payout-currency">
+        <option value="USD">🇺🇸 USD — US Dollar</option>
+        <option value="EUR">🇪🇺 EUR — Euro</option>
+        <option value="GBP">🇬🇧 GBP — British Pound</option>
+        <option value="MXN">🇲🇽 MXN — Mexican Peso</option>
+        <option value="COP">🇨🇴 COP — Colombian Peso</option>
+        <option value="DOP">🇩🇴 DOP — Dominican Peso</option>
+        <option value="BRL">🇧🇷 BRL — Brazilian Real</option>
+        <option value="CAD">🇨🇦 CAD — Canadian Dollar</option>
+      </select>
+      <label for="payout-amount">Amount</label>
+      <input type="number" id="payout-amount" min="1" step="0.01" required />
+      <button type="submit" class="primary" id="payout-btn">Continue on Noah</button>
+    </form>
+    <div id="payout-result"></div>
+  </div>
+
+  <div class="card">
+    <h2>Send a payment to someone else</h2>
+    <p class="hint">
+      Pay a supplier, contractor, or any third party directly — they don't need a DigiPagos or Noah account.
+      DigiPagos only forwards the instruction; Noah settles the funds to their bank account.
+    </p>
+
+    <div class="compliance-box">
+      <strong>Third-party payouts — your responsibility</strong>
+      DigiPagos only forwards a payout instruction to Noah. We are not the remitter of record and do not resolve bank rejects, recalls, or sanctions holds. You represent that you're authorized to pay this person or company, that the details are accurate, and that the payment is lawful. Noah may request extra KYC or refuse the payout.
+    </div>
+
+    <h3 style="font-size:0.9rem; margin: 4px 0 10px;">1. Add a recipient</h3>
+    <p id="recipient-error-msg"></p>
+    <form id="recipient-form">
+      <label for="recipient-name">Recipient legal name</label>
+      <input type="text" id="recipient-name" placeholder="Name as it appears on the bank account" required />
+
+      <label for="recipient-country">Country</label>
+      <select id="recipient-country">
+        <option value="US">🇺🇸 United States</option>
+        <option value="DO">🇩🇴 Dominican Republic</option>
+        <option value="CO">🇨🇴 Colombia</option>
+        <option value="MX">🇲🇽 Mexico</option>
+        <option value="BR">🇧🇷 Brazil</option>
+        <option value="AR">🇦🇷 Argentina</option>
+        <option value="CL">🇨🇱 Chile</option>
+        <option value="PE">🇵🇪 Peru</option>
+      </select>
+
+      <label for="recipient-currency">Currency</label>
+      <select id="recipient-currency">
+        <option value="USD">USD</option>
+        <option value="EUR">EUR</option>
+        <option value="DOP">DOP</option>
+        <option value="COP">COP</option>
+        <option value="MXN">MXN</option>
+        <option value="BRL">BRL</option>
+        <option value="ARS">ARS</option>
+        <option value="CLP">CLP</option>
+        <option value="PEN">PEN</option>
+      </select>
+
+      <label for="recipient-account">Bank account number</label>
+      <input type="text" id="recipient-account" required />
+
+      <label for="recipient-bankcode">Bank code / routing number (if applicable)</label>
+      <input type="text" id="recipient-bankcode" />
+
+      <label for="recipient-address">Account holder address</label>
+      <input type="text" id="recipient-address" />
+      <p class="hint" style="margin-top:-8px;">Used only to instruct Noah. DigiPagos does not use these details to move money itself, and does not store account or routing numbers.</p>
+
+      <button type="submit" class="secondary" id="recipient-btn">Save recipient</button>
+    </form>
+    <div id="recipient-result"></div>
+
+    <hr class="divider" />
+
+    <h3 style="font-size:0.9rem; margin: 4px 0 10px;">2. Send the instruction to Noah</h3>
+    <p id="send-payment-error-msg"></p>
+    <form id="send-payment-form">
+      <label for="send-recipient">Recipient</label>
+      <select id="send-recipient">
+        <option value="">Loading recipients…</option>
+      </select>
+
+      <label for="send-amount">Amount</label>
+      <input type="number" id="send-amount" min="1" step="0.01" required />
+
+      <label class="attest">
+        <input type="checkbox" id="send-attest" required />
+        <span>I confirm this payout is authorized by me, the beneficiary details are correct, and I understand DigiPagos does not hold or guarantee these funds — Noah processes and may reject the transfer.</span>
+      </label>
+
+      <button type="submit" class="primary" id="send-payment-btn">Send instruction to Noah</button>
+    </form>
+    <div id="send-payment-result"></div>
+  </div>
+
+  <div class="card">
+    <h2>Transaction history</h2>
+    <p class="hint">Statuses come from Noah webhooks. DigiPagos displays them for your records only and does not certify final settlement at the beneficiary bank.</p>
+    <div id="tx-container">
+      <p id="empty-tx">No transactions yet.</p>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <strong>DigiPagos is a non-custodial software interface.</strong><br>
+  We do not take deposits, operate wallets, provide escrow, or settle funds. Payments, conversions, and payouts are executed by Noah.
+  You are responsible for the accuracy of recipient data and for complying with applicable sanctions, tax, and AML rules.
+  Settlement timing, availability of funds, KYC/KYB, and banking decisions are Noah's responsibility.<br>
+  DigiPagos — Fast. Secure. Borderless.
+</footer>
+
+<script>
+  function statusClass(status) {
+    const s = String(status || "").toLowerCase();
+    if (s.includes("settle") || s.includes("complete") || s.includes("success")) return "settled";
+    if (s.includes("fail") || s.includes("cancel") || s.includes("reject")) return "failed";
+    if (s.includes("pend") || s.includes("process")) return "pending";
+    return "";
+  }
+
+  async function checkAuth() {
+    const res = await fetch("/api/auth/me", { credentials: "include" });
+    if (!res.ok) {
+      window.location.href = "/login.html";
+      return null;
+    }
+    const data = await res.json();
+    document.getElementById("welcome").textContent = "Welcome, " + data.email;
+    return data.email;
+  }
+
+  async function loadTransactions() {
+    const res = await fetch("/api/noah/transactions", { credentials: "include" });
+    if (!res.ok) return;
+    const data = await res.json();
+    const container = document.getElementById("tx-container");
+    const empty = document.getElementById("empty-tx");
+
+    if (!data.transactions || data.transactions.length === 0) {
+      empty.style.display = "block";
+      return;
+    }
+    empty.style.display = "none";
+
+    const table = document.createElement("table");
+    table.innerHTML = "<tr><th>Date</th><th>Type</th><th>Amount</th><th>Status</th></tr>";
+    data.transactions.forEach((tx) => {
+      const status = tx.Status || tx.status || "-";
+      const dir = tx.direction === "out" ? "Out" : tx.direction === "in" ? "In" : "—";
+      const row = document.createElement("tr");
+      row.innerHTML =
+        "<td>" + (tx.Created || tx.CreatedAt || "-") + "</td>" +
+        "<td>" + dir + "</td>" +
+        "<td>" + (tx.FiatAmount || tx.Amount || "-") + "</td>" +
+        "<td><span class='status " + statusClass(status) + "'>" + status + "</span></td>";
+      table.appendChild(row);
+    });
+    container.innerHTML = "";
+    container.appendChild(table);
+  }
+
+  async function loadBalance() {
+    const res = await fetch("/api/noah/balance", { credentials: "include" });
+    if (!res.ok) return;
+    const data = await res.json();
+    const display = document.getElementById("balance-display");
+    display.textContent = "$" + Number(data.estimatedBalance || 0).toFixed(2);
+  }
+
+  async function loadRecipients() {
+    const select = document.getElementById("send-recipient");
+    const res = await fetch("/api/noah/recipients", { credentials: "include" });
+    if (!res.ok) {
+      select.innerHTML = "<option value=''>Couldn't load recipients</option>";
+      return;
+    }
+    const data = await res.json();
+    if (!data.recipients || data.recipients.length === 0) {
+      select.innerHTML = "<option value=''>No recipients yet — add one above</option>";
+      return;
+    }
+    select.innerHTML = data.recipients
+      .map((r) => "<option value='" + r.recipientId + "'>" + r.recipientName + " (" + r.currency + ")</option>")
+      .join("");
+  }
+
+  document.getElementById("logout-btn").addEventListener("click", async () => {
+    await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+    window.location.href = "/login.html";
+  });
+
+  const payMethodSelect = document.getElementById("pay-method");
+  const payFiatFields = document.getElementById("pay-fiat-fields");
+  function togglePayFiatFields() {
+    payFiatFields.style.display = payMethodSelect.value === "fiat" ? "block" : "none";
+  }
+  payMethodSelect.addEventListener("change", togglePayFiatFields);
+  togglePayFiatFields();
+
+  const paymentForm = document.getElementById("payment-form");
+  const errorMsg = document.getElementById("error-msg");
+  const payBtn = document.getElementById("pay-btn");
+  const resultBox = document.getElementById("payment-result");
+
+  paymentForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    errorMsg.style.display = "none";
+    resultBox.style.display = "none";
+    payBtn.disabled = true;
+    payBtn.textContent = "Creating...";
+
+    const amount = document.getElementById("amount").value;
+    const method = document.getElementById("pay-method").value;
+    const fiatCurrency = document.getElementById("pay-currency").value;
+    const paymentMethodCategory = document.getElementById("pay-method-category").value;
+
+    try {
+      const res = await fetch("/api/noah/create-payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ amount, method, fiatCurrency, paymentMethodCategory }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        errorMsg.textContent = "Couldn't create the payment link. " + (data.message || "");
+        errorMsg.style.display = "block";
+        payBtn.disabled = false;
+        payBtn.textContent = "Create payment link";
+        return;
+      }
+
+      const checkoutUrl =
+        data.checkout && (data.checkout.Url || data.checkout.CheckoutUrl || data.checkout.HostedURL);
+
+      resultBox.style.display = "block";
+      resultBox.innerHTML = checkoutUrl
+        ? "Share this Noah-hosted checkout link with your customer. DigiPagos does not process or hold the payment:<br><a href='" + checkoutUrl + "' target='_blank' rel='noopener noreferrer'>" + checkoutUrl + "</a>"
+        : "Payment created, but no checkout link was found. Raw response: " + JSON.stringify(data.checkout);
+
+      paymentForm.reset();
+      loadTransactions();
+    } catch (err) {
+      errorMsg.textContent = "Network error. Please try again.";
+      errorMsg.style.display = "block";
+    } finally {
+      payBtn.disabled = false;
+      payBtn.textContent = "Create payment link";
+    }
+  });
+
+  const payoutForm = document.getElementById("payout-form");
+  const payoutErrorMsg = document.getElementById("payout-error-msg");
+  const payoutBtn = document.getElementById("payout-btn");
+  const payoutResultBox = document.getElementById("payout-result");
+
+  payoutForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    payoutErrorMsg.style.display = "none";
+    payoutResultBox.style.display = "none";
+    payoutBtn.disabled = true;
+    payoutBtn.textContent = "Starting...";
+
+    const amount = document.getElementById("payout-amount").value;
+    const fiatCurrency = document.getElementById("payout-currency").value;
+
+    try {
+      const res = await fetch("/api/noah/create-payout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ amount, fiatCurrency }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        payoutErrorMsg.textContent = "Couldn't start the withdrawal. " + (data.message || "");
+        payoutErrorMsg.style.display = "block";
+        payoutBtn.disabled = false;
+        payoutBtn.textContent = "Continue on Noah";
+        return;
+      }
+
+      const checkoutUrl =
+        data.checkout && (data.checkout.Url || data.checkout.CheckoutUrl || data.checkout.HostedURL);
+
+      payoutResultBox.style.display = "block";
+      payoutResultBox.innerHTML = checkoutUrl
+        ? "Continue on Noah's secure page to enter your bank details. DigiPagos never holds this payout:<br><a href='" + checkoutUrl + "' target='_blank' rel='noopener noreferrer'>" + checkoutUrl + "</a>"
+        : "Withdrawal started, but no link was found. Raw response: " + JSON.stringify(data.checkout);
+
+      payoutForm.reset();
+      loadTransactions();
+      loadBalance();
+    } catch (err) {
+      payoutErrorMsg.textContent = "Network error. Please try again.";
+      payoutErrorMsg.style.display = "block";
+    } finally {
+      payoutBtn.disabled = false;
+      payoutBtn.textContent = "Continue on Noah";
+    }
+  });
+
+  const recipientForm = document.getElementById("recipient-form");
+  const recipientErrorMsg = document.getElementById("recipient-error-msg");
+  const recipientBtn = document.getElementById("recipient-btn");
+  const recipientResultBox = document.getElementById("recipient-result");
+
+  recipientForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    recipientErrorMsg.style.display = "none";
+    recipientResultBox.style.display = "none";
+    recipientBtn.disabled = true;
+    recipientBtn.textContent = "Saving...";
+
+    const recipientName = document.getElementById("recipient-name").value;
+    const country = document.getElementById("recipient-country").value;
+    const currency = document.getElementById("recipient-currency").value;
+    const accountNumber = document.getElementById("recipient-account").value;
+    const bankCode = document.getElementById("recipient-bankcode").value;
+    const accountHolderAddress = document.getElementById("recipient-address").value;
+
+    try {
+      const res = await fetch("/api/noah/recipients", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ recipientName, country, currency, accountNumber, bankCode, accountHolderAddress }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        recipientErrorMsg.textContent = "Couldn't save this recipient. " + (data.message || "");
+        recipientErrorMsg.style.display = "block";
+        recipientBtn.disabled = false;
+        recipientBtn.textContent = "Save recipient";
+        return;
+      }
+
+      recipientResultBox.style.display = "block";
+      recipientResultBox.textContent = "Recipient saved. DigiPagos will only use it to tell Noah where to send funds.";
+      recipientForm.reset();
+      loadRecipients();
+    } catch (err) {
+      recipientErrorMsg.textContent = "Network error. Please try again.";
+      recipientErrorMsg.style.display = "block";
+    } finally {
+      recipientBtn.disabled = false;
+      recipientBtn.textContent = "Save recipient";
+    }
+  });
+
+  const sendPaymentForm = document.getElementById("send-payment-form");
+  const sendPaymentErrorMsg = document.getElementById("send-payment-error-msg");
+  const sendPaymentBtn = document.getElementById("send-payment-btn");
+  const sendPaymentResultBox = document.getElementById("send-payment-result");
+
+  sendPaymentForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    sendPaymentErrorMsg.style.display = "none";
+    sendPaymentResultBox.style.display = "none";
+    sendPaymentBtn.disabled = true;
+    sendPaymentBtn.textContent = "Sending...";
+
+    const recipientId = document.getElementById("send-recipient").value;
+    const amount = document.getElementById("send-amount").value;
+
+    if (!recipientId) {
+      sendPaymentErrorMsg.textContent = "Add and select a recipient first.";
+      sendPaymentErrorMsg.style.display = "block";
+      sendPaymentBtn.disabled = false;
+      sendPaymentBtn.textContent = "Send instruction to Noah";
+      return;
+    }
+
+    try {
+      const res = await fetch("/api/noah/send-payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ recipientId, amount }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        sendPaymentErrorMsg.textContent = "Couldn't send the payment. " + (data.message || "");
+        sendPaymentErrorMsg.style.display = "block";
+        sendPaymentBtn.disabled = false;
+        sendPaymentBtn.textContent = "Send instruction to Noah";
+        return;
+      }
+
+      sendPaymentResultBox.style.display = "block";
+      sendPaymentResultBox.textContent = "Instruction sent to Noah. DigiPagos does not hold these funds. Check Transaction history for Noah's status.";
+      sendPaymentForm.reset();
+      loadTransactions();
+      loadBalance();
+    } catch (err) {
+      sendPaymentErrorMsg.textContent = "Network error. Please try again.";
+      sendPaymentErrorMsg.style.display = "block";
+    } finally {
+      sendPaymentBtn.disabled = false;
+      sendPaymentBtn.textContent = "Send instruction to Noah";
+    }
+  });
+
+  (async () => {
+    const email = await checkAuth();
+    if (email) {
+      loadTransactions();
+      loadBalance();
+      loadRecipients();
+    }
+  })();
+</script>
+
+</body>
+</html>
