@@ -39,7 +39,7 @@ button, input, select { font: inherit; color: inherit; }
 .shell { display: grid; grid-template-columns: 244px minmax(0, 1fr); min-height: 100vh; }
 .side { background: #fff; border-right: 1px solid var(--line); display: flex; flex-direction: column; padding: 20px 14px; position: sticky; top: 0; height: 100vh; }
 .brand { padding: 4px 10px 24px; }
-.brand img { height: 65px; width: auto; display: block; max-width: 100%; }
+.brand img { height: 34px; width: auto; display: block; max-width: 100%; }
 .nav { display: flex; flex-direction: column; gap: 2px; }
 .nav a { display: flex; align-items: center; gap: 12px; padding: 9px 10px; border-radius: var(--r); color: var(--muted); text-decoration: none; font-weight: 500; }
 .nav a:hover { background: var(--bg); color: var(--text); }
@@ -196,10 +196,6 @@ input:focus, select:focus { border-color: var(--cyan); }
       <a href="#withdrawals" data-route="withdrawals">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V9M7 13l5-5 5 5M5 4h14"/></svg>
         Withdrawals
-      </a>
-      <a href="#send" data-route="send">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
-        Send payment
       </a>
       <a href="#transactions" data-route="transactions">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
@@ -449,8 +445,7 @@ input:focus, select:focus { border-color: var(--cyan); }
       html += '<div class="actions" style="margin-bottom:18px">' +
         '<a class="btn btn-primary" href="#payments">Create payment link</a>' +
         '<a class="btn btn-ghost" href="#banking">Open a bank account</a>' +
-        '<a class="btn btn-ghost" href="#withdrawals">Withdraw</a>' +
-        '<a class="btn btn-ghost" href="#send">Send payment</a></div>';
+        '<a class="btn btn-ghost" href="#withdrawals">Withdraw</a></div>';
 
       html += '<section class="panel"><div class="panel-h"><h2>Recent activity</h2><a href="#transactions">View all</a></div>' +
         txTable(tx.slice(0, 6), false) + "</section>";
@@ -458,17 +453,71 @@ input:focus, select:focus { border-color: var(--cyan); }
     }).catch(function (e) { errorView(T, e); });
   }
 
-  function verification() {
-    var T = "Verification", S = "Noah checks your identity once. After that you can receive and withdraw.";
+  function startOnboarding(container, accountType, autostart) {
+    var goIndividual = function () {
+      container.innerHTML = '<div class="loading">Opening verification...</div>';
+      openHostedSession(container, "Individual");
+    };
+    var goBusiness = function () {
+      container.innerHTML =
+        '<section class="panel"><div class="panel-h"><h2>Business details</h2></div><div class="panel-b"><form id="biz-form" novalidate>' +
+        '<div class="row2"><div class="field"><label for="b-name">Legal company name</label><input id="b-name" required></div>' +
+        '<div class="field"><label for="b-type">Entity type</label><input id="b-type" list="etypes" placeholder="e.g. LLC, Corporation" required>' +
+        '<datalist id="etypes"><option value="LLC"><option value="Corporation"><option value="Partnership"><option value="Sole Proprietorship"></datalist></div></div>' +
+        '<div class="row2"><div class="field"><label for="b-country">Registration country</label><input id="b-country" placeholder="US" maxlength="2" required></div>' +
+        '<div class="field"><label for="b-regnum">Registration number</label><input id="b-regnum" required></div></div>' +
+        '<div class="field"><label for="b-website">Company website (optional)</label><input id="b-website" type="url" placeholder="https://"></div>' +
+        '<button class="btn btn-primary" type="submit" id="b-submit">Continue to identity verification</button></form></div></section>';
+      $("#biz-form", container).addEventListener("submit", function (ev) {
+        ev.preventDefault();
+        var btn = $("#b-submit", container); btn.disabled = true; btn.textContent = "Saving...";
+        api("/api/noah/business-prefill", {
+          method: "POST",
+          body: {
+            companyName: $("#b-name", container).value.trim(),
+            entityType: $("#b-type", container).value.trim(),
+            registrationCountry: $("#b-country", container).value.trim().toUpperCase(),
+            registrationNumber: $("#b-regnum", container).value.trim(),
+            website: $("#b-website", container).value.trim() || undefined,
+          }
+        }).then(function () {
+          container.innerHTML = '<div class="loading">Opening verification...</div>';
+          openHostedSession(container, "Business");
+        }).catch(function (e) { btn.disabled = false; btn.textContent = "Continue to identity verification"; toast(e.message, true); });
+      });
+    };
+    if (accountType === "Business") { goBusiness(); return; }
+    if (accountType === "Individual" || autostart) { goIndividual(); return; }
+    container.innerHTML =
+      '<section class="panel"><div class="panel-h"><h2>Are you signing up as</h2></div><div class="panel-b actions">' +
+      '<button class="btn btn-primary" type="button" id="pick-ind">An individual</button>' +
+      '<button class="btn btn-ghost" type="button" id="pick-biz">A business</button></div></section>';
+    $("#pick-ind", container).addEventListener("click", goIndividual);
+    $("#pick-biz", container).addEventListener("click", goBusiness);
+  }
+
+  function openHostedSession(container, accountType) {
+    api("/api/noah/onboarding-session", { method: "POST", body: { fiatCurrency: "USD", accountType: accountType } }).then(function (d) {
+      var url = findUrl(d.onboarding);
+      if (!url) throw new Error("Noah did not return a verification link.");
+      container.innerHTML = '<section class="panel"><div class="panel-h"><h2>Identity check</h2>' +
+        '<a href="' + esc(url) + '" target="_blank" rel="noopener">Open in a new tab</a></div><div class="panel-b">' +
+        '<iframe class="kyc-frame" title="Identity verification" src="' + esc(url) + '" allow="camera; microphone; clipboard-write"></iframe></div></section>';
+    }).catch(function (e) { container.innerHTML = ""; toast(e.message, true); });
+  }
+
+  function verification(opts) {
+    opts = opts || {};
+    var T = "Verification", S = "Noah checks your identity or your business once. After that you can receive and withdraw.";
     loadingView(T, S);
     loadKyc().then(function () {
       var k = kycInfo(state.kyc);
       var msg = k.ok
-        ? "Your identity is verified. You can create payment links, open bank accounts and withdraw."
+        ? "You're verified. You can create payment links, open bank accounts and withdraw."
         : k.label === "In review"
           ? "Noah is reviewing your information. This usually takes a few minutes. Check again shortly."
           : k.label === "Not started"
-            ? "You have not started verification yet. It takes a few minutes and you need a passport or another government ID."
+            ? "You have not started verification yet. Individuals need a passport or another government ID; businesses need their registration details."
             : "Noah could not approve this verification (" + esc(state.kyc) + "). Start again or contact support.";
       var html = head(T, S) +
         '<section class="panel"><div class="panel-h"><h2>Status</h2><span class="badge ' + k.cls + '">' + esc(k.label) + "</span></div>" +
@@ -478,19 +527,11 @@ input:focus, select:focus { border-color: var(--cyan); }
         '<button class="btn btn-ghost" type="button" id="kyc-refresh">Check status</button></div></div></section>' +
         '<div id="kyc-slot"></div>';
       view(html);
+      var slot = $("#kyc-slot");
       var start = $("#kyc-start");
-      if (start) start.addEventListener("click", function () {
-        start.disabled = true; start.textContent = "Opening...";
-        api("/api/noah/onboarding-session", { method: "POST", body: { fiatCurrency: "USD" } }).then(function (d) {
-          var url = findUrl(d.onboarding);
-          if (!url) throw new Error("Noah did not return a verification link.");
-          $("#kyc-slot").innerHTML = '<section class="panel"><div class="panel-h"><h2>Identity check</h2>' +
-            '<a href="' + esc(url) + '" target="_blank" rel="noopener">Open in a new tab</a></div><div class="panel-b">' +
-            '<iframe class="kyc-frame" title="Identity verification" src="' + esc(url) + '" allow="camera; microphone; clipboard-write"></iframe></div></section>';
-          start.disabled = false; start.textContent = "Continue verification";
-        }).catch(function (e) { start.disabled = false; start.textContent = "Start verification"; toast(e.message, true); });
-      });
+      if (start) start.addEventListener("click", function () { startOnboarding(slot, null, false); });
       $("#kyc-refresh").addEventListener("click", function () { verification(); });
+      if (opts.autostart && !k.ok) startOnboarding(slot, null, true);
     }).catch(function (e) { errorView(T, e); });
   }
 
@@ -633,99 +674,6 @@ input:focus, select:focus { border-color: var(--cyan); }
     });
   }
 
-  function loadRecipients() {
-    return api("/api/noah/recipients").then(function (d) { return d.recipients || []; });
-  }
-
-  function recipientCard(r) {
-    return '<div class="kv" style="margin-bottom:10px"><dt>' + esc(r.recipientName) + '</dt><dd>' +
-      esc(r.country) + " \u00b7 " + esc(r.currency) + "</dd></div>";
-  }
-
-  function send() {
-    var T = "Send payment", S = "Pay a supplier or contractor directly. They do not need a DigiPagos or Noah account.";
-    loadingView(T, S);
-    Promise.all([loadKyc(), loadRecipients()]).then(function (r) {
-      var recipients = r[1];
-      var html = head(T, S) + kycBanner();
-      html += '<div class="note warn">Third-party payouts are your responsibility. DigiPagos only forwards the instruction to Noah and is not the remitter of record; we do not resolve bank rejects, recalls or sanctions holds. You confirm you are authorized to pay this person or company and that the details are accurate.</div>';
-
-      html += '<div class="two-col"><div>';
-      html += '<section class="panel"><div class="panel-h"><h2>Recipients</h2></div><div class="panel-b">';
-      html += recipients.length
-        ? recipients.map(recipientCard).join('<hr class="sep">')
-        : '<div class="empty"><strong>No recipients yet</strong>Add one with the form and it will appear here.</div>';
-      html += "</div></section>";
-
-      html += '<section class="panel"><div class="panel-h"><h2>Add a recipient</h2></div><div class="panel-b"><form id="rc-form" novalidate>' +
-        '<div class="field"><label for="rc-name">Recipient legal name</label><input id="rc-name" required placeholder="Name as it appears on the bank account"></div>' +
-        '<div class="row2"><div class="field"><label for="rc-country">Country</label><select id="rc-country">' +
-        '<option value="US">United States</option><option value="DO">Dominican Republic</option><option value="CO">Colombia</option>' +
-        '<option value="MX">Mexico</option><option value="BR">Brazil</option><option value="AR">Argentina</option>' +
-        '<option value="CL">Chile</option><option value="PE">Peru</option></select></div>' +
-        '<div class="field"><label for="rc-currency">Currency</label><select id="rc-currency">' +
-        '<option value="USD">USD</option><option value="EUR">EUR</option><option value="DOP">DOP</option><option value="COP">COP</option>' +
-        '<option value="MXN">MXN</option><option value="BRL">BRL</option><option value="ARS">ARS</option><option value="CLP">CLP</option><option value="PEN">PEN</option>' +
-        "</select></div></div>" +
-        '<div class="field"><label for="rc-account">Bank account number</label><input id="rc-account" required></div>' +
-        '<div class="field"><label for="rc-bankcode">Bank code / routing number (if applicable)</label><input id="rc-bankcode"></div>' +
-        '<div class="field"><label for="rc-address">Account holder address</label><input id="rc-address"></div>' +
-        '<div class="hint">Used only to instruct Noah. DigiPagos does not store account or routing numbers.</div>' +
-        '<button class="btn btn-ghost" type="submit" id="rc-submit" style="margin-top:10px">Save recipient</button></form></div></section>';
-      html += "</div><div>";
-
-      html += '<section class="panel"><div class="panel-h"><h2>Send a payment</h2></div><div class="panel-b"><form class="form-narrow" id="sp-form" novalidate>' +
-        '<div class="field"><label for="sp-recipient">Recipient</label><select id="sp-recipient">' +
-        (recipients.length
-          ? recipients.map(function (r) {
-              return '<option value="' + esc(r.recipientId) + '">' + esc(r.recipientName) + " (" + esc(r.currency) + ")</option>";
-            }).join("")
-          : '<option value="">Add a recipient first</option>') +
-        "</select></div>" +
-        '<div class="field"><label for="sp-amount">Amount</label><input id="sp-amount" type="number" min="0.01" step="0.01" inputmode="decimal" required></div>' +
-        '<label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;color:var(--muted);margin-bottom:14px"><input type="checkbox" id="sp-attest" required style="width:auto;margin-top:3px">' +
-        "<span>I confirm this payout is authorized by me, the beneficiary details are correct, and I understand DigiPagos does not hold or guarantee these funds \u2014 Noah processes and may reject the transfer.</span></label>" +
-        '<button class="btn btn-primary" type="submit" id="sp-submit">Send instruction to Noah</button></form>' +
-        '<div id="sp-result"></div></div></section>';
-      html += "</div></div>";
-
-      view(html);
-
-      $("#rc-form").addEventListener("submit", function (ev) {
-        ev.preventDefault();
-        var btn = $("#rc-submit"); btn.disabled = true; btn.textContent = "Saving...";
-        api("/api/noah/recipients", {
-          method: "POST",
-          body: {
-            recipientName: $("#rc-name").value.trim(),
-            country: $("#rc-country").value,
-            currency: $("#rc-currency").value,
-            accountNumber: $("#rc-account").value.trim(),
-            bankCode: $("#rc-bankcode").value.trim(),
-            accountHolderAddress: $("#rc-address").value.trim(),
-          },
-        }).then(function () { toast("Recipient saved"); send(); })
-          .catch(function (e) { toast(e.message, true); btn.disabled = false; btn.textContent = "Save recipient"; });
-      });
-
-      var spForm = $("#sp-form");
-      spForm.addEventListener("submit", function (ev) {
-        ev.preventDefault();
-        var recipientId = $("#sp-recipient").value;
-        var amount = Number($("#sp-amount").value);
-        if (!recipientId) { toast("Add and select a recipient first", true); return; }
-        if (!(amount > 0)) { toast("Enter an amount greater than 0", true); return; }
-        var btn = $("#sp-submit"); btn.disabled = true; btn.textContent = "Sending...";
-        api("/api/noah/send-payment", { method: "POST", body: { recipientId: recipientId, amount: amount } }).then(function () {
-          $("#sp-result").innerHTML = '<hr class="sep"><div class="note">Instruction sent to Noah. DigiPagos does not hold these funds. Check <a href="#transactions">Transactions</a> for status.</div>';
-          $("#sp-amount").value = "";
-          $("#sp-attest").checked = false;
-        }).catch(function (e) { toast(e.message, true); })
-          .then(function () { btn.disabled = false; btn.textContent = "Send instruction to Noah"; });
-      });
-    }).catch(function (e) { errorView(T, e); });
-  }
-
   function transactions() {
     var T = "Transactions", S = "Everything Noah has reported for your account.";
     loadingView(T, S);
@@ -757,12 +705,13 @@ input:focus, select:focus { border-color: var(--cyan); }
   }
 
   /* ---------- router ---------- */
-  var routes = { overview: overview, payments: payments, banking: banking, withdrawals: withdrawals, send: send, transactions: transactions, verification: verification };
-  var titles = { overview: "Overview", payments: "Receive payments", banking: "Bank transfers", withdrawals: "Withdrawals", send: "Send payment", transactions: "Transactions", verification: "Verification" };
+  var routes = { overview: overview, payments: payments, banking: banking, withdrawals: withdrawals, transactions: transactions, verification: function () { verification({ autostart: window.location.hash.indexOf("verification?start") !== -1 }); } };
+  var titles = { overview: "Overview", payments: "Receive payments", banking: "Bank transfers", withdrawals: "Withdrawals", transactions: "Transactions", verification: "Verification" };
   var current = "overview";
 
   function route() {
-    var key = (window.location.hash || "#overview").slice(1);
+    var raw = (window.location.hash || "#overview").slice(1);
+    var key = raw.split("?")[0];
     if (!routes[key]) key = "overview";
     current = key;
     var links = document.querySelectorAll("#nav a");

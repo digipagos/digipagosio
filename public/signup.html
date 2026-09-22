@@ -75,8 +75,8 @@
         return;
       }
 
-      // Next step: identity verification, using their email as the customer ID
-      window.location.href = "/?cid=" + encodeURIComponent(email);
+      // Next step: identity verification (individual or business), inside the dashboard
+      window.location.href = "/dashboard.html#verification?start";
     } catch (err) {
       errorMsg.textContent = "Network error. Please try again.";
       errorMsg.style.display = "block";
