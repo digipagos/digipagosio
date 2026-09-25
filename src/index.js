@@ -30,12 +30,45 @@
  *  - NOAH_API_BASE           (var)    -> defaults to sandbox below
  *  - NOAH_WEBHOOK_PUBLIC_KEY (var)    -> Noah's public key, verifies incoming webhooks
  *  - AUTH_SECRET             (secret) -> signs our own login session tokens
+ *  - RESEND_API_KEY          (secret, OPTIONAL) -> if set, enables real
+ *      "forgot password" emails via Resend. Without it, reset tokens are
+ *      still created but no email is sent (see handleForgotPassword).
+ *  - RESEND_FROM_EMAIL       (var, OPTIONAL) -> defaults to
+ *      "DigiPagos <support@digipagos.io>"; override if that mailbox isn't
+ *      verified in Resend yet
+ *  - VELAFI_API_KEY          (secret, OPTIONAL) -> X-BH-TOKEN header for
+ *      VelaFi API calls. NOT SET YET as of this writing — VelaFi doesn't
+ *      hand out sandbox credentials publicly; Daniel needs to request them
+ *      (API Key + Secret, and confirmation of how X-BH-TOKEN is derived)
+ *      from VelaFi support / Juan Felipe before this does anything real.
+ *      Every VelaFi route below fails closed with a clear error until it's set.
+ *  - VELAFI_API_BASE         (var, OPTIONAL) -> defaults to sandbox below
+ *  - ADMIN_KEY               (secret, OPTIONAL) -> a single password that
+ *      unlocks the internal master dashboard (/admin.html), showing every
+ *      merchant and the settled volume they've moved. NOT a merchant
+ *      account — its own short-lived signed cookie, separate from merchant
+ *      sessions. Without it, /api/admin/* fails closed with 501.
+ *
+ * HYBRID CROSS-BORDER MODEL (Noah on-ramp + VelaFi off-ramp):
+ *  For corridors where Noah's own local-currency payout is unavailable,
+ *  disabled, or pricier (e.g. Argentina, Dominican Republic, China), the
+ *  plan is: Noah converts the customer's fiat to stablecoin (on-ramp, as
+ *  today), then DigiPagos calls Noah's `POST workflows/bank-deposit-to-
+ *  onchain-address` to withdraw that stablecoin to the *same onboarded
+ *  customer's own individual VelaFi wallet* (VelaFi auto-provisions one
+ *  per merchant/KYB'd customer — confirmed with both Noah and VelaFi this
+ *  satisfies Noah's rule that the DestinationAddress must belong to the
+ *  onboarded individual, not a third party). VelaFi then completes the
+ *  off-ramp to local currency via POST /v2/order/crypto_to_fiat.
+ *  Network: USDC on Polygon (cheapest gas, supported by both sides).
+ *  DigiPagos never custodies the stablecoin at any point in this chain.
  *
  * KV NAMESPACE EXPECTED:
  *  - DIGIPAGOS_CUSTOMERS  -> merchant accounts, onboarding status, ledger
  */
 
 const NOAH_API_BASE_DEFAULT = "https://api.sandbox.noah.com/v1";
+const VELAFI_API_BASE_DEFAULT = "https://api-test.velafi.com";
 
 // Where the site root sends visitors. Change SIGNUP_PATH if your signup page
 // lives at a different URL.
@@ -75,7 +108,7 @@ function currencyError(env, currency) {
   return jsonResponse(
     {
       error: "currency_not_enabled",
-      message: `Currency ${currency} is not enabled yet. Enabled: ${allowed.join(", ")}`,
+      message: Currency ${currency} is not enabled yet. Enabled: ${allowed.join(", ")},
     },
     400
   );
@@ -86,7 +119,7 @@ function currencyError(env, currency) {
 // in the Customer webhook logs before turning this on.
 async function kycBlocked(env, noahCustomerId) {
   if (env.REQUIRE_KYC !== "true") return null;
-  const raw = await env.DIGIPAGOS_CUSTOMERS.get(`customer:${noahCustomerId}`);
+  const raw = await env.DIGIPAGOS_CUSTOMERS.get(customer:${noahCustomerId});
   const status = raw ? JSON.parse(raw).verificationStatus : null;
   const approved = (env.KYC_APPROVED_STATUSES || "Approved")
     .split(",").map((v) => v.trim().toLowerCase());
@@ -131,6 +164,33 @@ export default {
         return await handleAuthMe(request, env);
       }
 
+      if (path === "/api/auth/forgot-password" && request.method === "POST") {
+        return await handleForgotPassword(request, env);
+      }
+
+      if (path === "/api/auth/reset-password" && request.method === "POST") {
+        return await handleResetPassword(request, env);
+      }
+
+      // --- Internal master dashboard: Daniel-only view across all merchants
+      // and their transaction volume. Gated by a single ADMIN_KEY secret,
+      // never a merchant account. See handleAdminLogin/handleAdminOverview.
+      if (path === "/api/admin/login" && request.method === "POST") {
+        return await handleAdminLogin(request, env);
+      }
+
+      if (path === "/api/admin/logout" && request.method === "POST") {
+        return handleAdminLogout();
+      }
+
+      if (path === "/api/admin/overview" && request.method === "GET") {
+        return await handleAdminOverview(request, env);
+      }
+
+      if (path.startsWith("/api/admin/merchant/") && request.method === "GET") {
+        return await handleAdminMerchantDetail(request, env, path.slice("/api/admin/merchant/".length));
+      }
+
       if (path === "/api/noah/customer" && request.method === "POST") {
         return await handleCreateCustomer(request, env);
       }
@@ -165,6 +225,25 @@ export default {
 
       if (path === "/api/noah/business-prefill" && request.method === "POST") {
         return await handleBusinessPrefill(request, env);
+      }
+
+      // --- Hybrid cross-border: Noah on-ramp -> withdraw to the customer's
+      // own VelaFi wallet -> VelaFi off-ramp to local currency. See the
+      // HYBRID CROSS-BORDER MODEL note at the top of this file.
+      if (path === "/api/noah/withdraw-to-wallet" && request.method === "POST") {
+        return await handleWithdrawToWallet(request, env);
+      }
+
+      if (path === "/api/velafi/quote" && request.method === "GET") {
+        return await handleVelafiQuote(request, env);
+      }
+
+      if (path === "/api/velafi/off-ramp" && request.method === "POST") {
+        return await handleVelafiOffRamp(request, env);
+      }
+
+      if (path.startsWith("/api/velafi/order/") && request.method === "GET") {
+        return await handleVelafiGetOrder(request, env, path.slice("/api/velafi/order/".length));
       }
 
       if (path === "/api/noah/create-virtual-account" && request.method === "POST") {
@@ -224,7 +303,7 @@ async function handleCreateCustomer(request, env) {
   const noahBase = env.NOAH_API_BASE || NOAH_API_BASE_DEFAULT;
   const noahPayload = { Type: type, ...body.fields };
 
-  const noahRes = await fetch(`${noahBase}/customers/${encodeURIComponent(internalCustomerId)}`, {
+  const noahRes = await fetch(${noahBase}/customers/${encodeURIComponent(internalCustomerId)}, {
     method: "PUT",
     headers: {
       "Content-Type": "application/json",
@@ -241,7 +320,7 @@ async function handleCreateCustomer(request, env) {
 
   if (env.DIGIPAGOS_CUSTOMERS) {
     await env.DIGIPAGOS_CUSTOMERS.put(
-      `customer:${internalCustomerId}`,
+      customer:${internalCustomerId},
       JSON.stringify({
         noahCustomerId: internalCustomerId,
         type,
@@ -283,7 +362,7 @@ async function handleCreateOnboardingSession(request, env) {
   };
 
   const noahRes = await fetch(
-    `${noahBase}/onboarding/${encodeURIComponent(noahCustomerId)}`,
+    ${noahBase}/onboarding/${encodeURIComponent(noahCustomerId)},
     {
       method: "POST",
       headers: {
@@ -336,7 +415,7 @@ async function handleGetPrice(request, env) {
   if (sourceAmount) qs.set("SourceAmount", sourceAmount);
   if (destinationAmount) qs.set("DestinationAmount", destinationAmount);
 
-  const noahRes = await fetch(`${noahBase}/prices?${qs.toString()}`, {
+  const noahRes = await fetch(${noahBase}/prices?${qs.toString()}, {
     headers: { "X-Api-Key": env.NOAH_API_KEY },
   });
   const noahData = await safeJson(noahRes);
@@ -363,7 +442,7 @@ async function handleGetTransactionById(request, env, transactionId) {
   }
 
   const noahBase = env.NOAH_API_BASE || NOAH_API_BASE_DEFAULT;
-  const noahRes = await fetch(`${noahBase}/transactions/${encodeURIComponent(transactionId)}`, {
+  const noahRes = await fetch(${noahBase}/transactions/${encodeURIComponent(transactionId)}, {
     headers: { "X-Api-Key": env.NOAH_API_KEY },
   });
   const noahData = await safeJson(noahRes);
@@ -382,6 +461,197 @@ async function handleGetTransactionById(request, env, transactionId) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  6c. Hybrid cross-border: point Noah's bank-deposit-to-onchain-address */
+/*      workflow at the customer's own individual VelaFi wallet, so any  */
+/*      fiat that lands in their Noah virtual account auto-converts and  */
+/*      forwards on-chain; VelaFi then completes the off-ramp to local   */
+/*      currency.                                                        */
+/*                                                                        */
+/*  STATUS: scaffolded, not yet live (no VELAFI_API_KEY — VelaFi paused  */
+/*  US onboarding). Noah's team has now confirmed the request contract   */
+/*  for workflows/bank-deposit-to-onchain-address directly:            */
+/*    Required: CustomerID, FiatCurrency, CryptoCurrency, Network,       */
+/*      DestinationAddress as an OBJECT — { "Address": "..." } — never   */
+/*      a bare string.                                                   */
+/*    Optional: BusinessFees.                                            */
+/*  There is no Amount/Currency field: this is not a one-off "withdraw   */
+/*  $X now" call, it (re)points the workflow/virtual-account's auto-     */
+/*  forward destination — the same call handleCreateVirtualAccount()     */
+/*  above already makes correctly. Preconditions confirmed by Noah:      */
+/*  the customer must already exist, Verifications.Status must be        */
+/*  Approved for the fiat option being issued, and every required        */
+/*  Agreements row must have Accepted: true — if OnboardingStatus is     */
+/*  AgreementsRequired, the call will not create/update the account.     */
+/*  USD virtual accounts are Standard Model only, which matches this     */
+/*  integration.                                                         */
+/* ------------------------------------------------------------------ */
+async function handleWithdrawToWallet(request, env) {
+  const email = await getSessionEmail(request, env);
+  if (!email) {
+    return jsonResponse({ error: "not_authenticated" }, 401);
+  }
+
+  const { destinationAddress, fiatCurrency, cryptoCurrency, network, businessFees } =
+    await request.json().catch(() => ({}));
+  const address = String(destinationAddress || "").trim();
+  if (!address || !network || !cryptoCurrency) {
+    return jsonResponse(
+      { error: "invalid_input", message: "destinationAddress, network, and cryptoCurrency are required" },
+      400
+    );
+  }
+
+  const noahCustomerId = toNoahCustomerId(email);
+
+  // Noah confirmed this call is a no-op (or outright fails) unless the
+  // customer's verification is Approved and all required Agreements rows
+  // are Accepted. kycBlocked() covers the Approved check; we don't have a
+  // cheap local check for Agreements/OnboardingStatus, so Noah's own error
+  // response is what ultimately gates this when REQUIRE_KYC is off.
+  const blocked = await kycBlocked(env, noahCustomerId);
+  if (blocked) return blocked;
+
+  const noahBase = env.NOAH_API_BASE || NOAH_API_BASE_DEFAULT;
+  const payload = {
+    CustomerID: noahCustomerId,
+    FiatCurrency: fiatCurrency || "USD",
+    CryptoCurrency: cryptoCurrency,
+    Network: network,
+    DestinationAddress: { Address: address },
+  };
+  if (businessFees) payload.BusinessFees = businessFees;
+
+  const noahRes = await fetch(${noahBase}/workflows/bank-deposit-to-onchain-address, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Api-Key": env.NOAH_API_KEY },
+    body: JSON.stringify(payload),
+  });
+  const noahData = await safeJson(noahRes);
+
+  if (!noahRes.ok) {
+    if (noahData && noahData.OnboardingStatus === "AgreementsRequired") {
+      return jsonResponse(
+        {
+          error: "agreements_required",
+          message: "Outstanding Provider agreements must be accepted before this account can be created.",
+          details: noahData,
+        },
+        409
+      );
+    }
+    return jsonResponse({ error: "noah_error", details: noahData, message: formatNoahError(noahData) }, noahRes.status);
+  }
+
+  return jsonResponse({ ok: true, withdrawal: noahData });
+}
+
+function velafiHeaders(env) {
+  return { "X-BH-TOKEN": env.VELAFI_API_KEY, "Content-Type": "application/json" };
+}
+
+function velafiNotConfigured() {
+  return jsonResponse(
+    {
+      error: "velafi_not_configured",
+      message: "VELAFI_API_KEY is not set. Request sandbox credentials from VelaFi before using this route.",
+    },
+    501
+  );
+}
+
+async function handleVelafiQuote(request, env) {
+  const email = await getSessionEmail(request, env);
+  if (!email) {
+    return jsonResponse({ error: "not_authenticated" }, 401);
+  }
+  if (!env.VELAFI_API_KEY) {
+    return velafiNotConfigured();
+  }
+
+  const url = new URL(request.url);
+  const country = url.searchParams.get("country");
+  const from = url.searchParams.get("from");
+  const to = url.searchParams.get("to");
+  if (!country || !from || !to) {
+    return jsonResponse({ error: "invalid_input", message: "country, from, and to are required" }, 400);
+  }
+
+  const velafiBase = env.VELAFI_API_BASE || VELAFI_API_BASE_DEFAULT;
+  const qs = new URLSearchParams({ country, from, to });
+  const velafiRes = await fetch(${velafiBase}/v2/user/crypto-quote?${qs.toString()}, {
+    headers: velafiHeaders(env),
+  });
+  const velafiData = await safeJson(velafiRes);
+
+  if (!velafiRes.ok) {
+    return jsonResponse({ error: "velafi_error", details: velafiData }, velafiRes.status);
+  }
+
+  return jsonResponse({ ok: true, quote: velafiData });
+}
+
+async function handleVelafiOffRamp(request, env) {
+  const email = await getSessionEmail(request, env);
+  if (!email) {
+    return jsonResponse({ error: "not_authenticated" }, 401);
+  }
+  if (!env.VELAFI_API_KEY) {
+    return velafiNotConfigured();
+  }
+
+  const { crypto, cryptoAmount, country, fiat, userPaymentId, remark } = await request.json().catch(() => ({}));
+  if (!crypto || !cryptoAmount || !country || !fiat || !userPaymentId) {
+    return jsonResponse(
+      { error: "invalid_input", message: "crypto, cryptoAmount, country, fiat, and userPaymentId are required" },
+      400
+    );
+  }
+
+  const velafiBase = env.VELAFI_API_BASE || VELAFI_API_BASE_DEFAULT;
+  const velafiRes = await fetch(${velafiBase}/v2/order/crypto_to_fiat, {
+    method: "POST",
+    headers: velafiHeaders(env),
+    body: JSON.stringify({ crypto, cryptoAmount, country, fiat, userPaymentId, remark, clientId: toNoahCustomerId(email) }),
+  });
+  const velafiData = await safeJson(velafiRes);
+
+  if (!velafiRes.ok) {
+    return jsonResponse({ error: "velafi_error", details: velafiData }, velafiRes.status);
+  }
+
+  return jsonResponse({ ok: true, order: velafiData });
+}
+
+async function handleVelafiGetOrder(request, env, orderId) {
+  const email = await getSessionEmail(request, env);
+  if (!email) {
+    return jsonResponse({ error: "not_authenticated" }, 401);
+  }
+  if (!env.VELAFI_API_KEY) {
+    return velafiNotConfigured();
+  }
+  if (!orderId) {
+    return jsonResponse({ error: "invalid_input", message: "orderId is required" }, 400);
+  }
+
+  const url = new URL(request.url);
+  const orderType = url.searchParams.get("orderType") || "crypto_to_fiat";
+
+  const velafiBase = env.VELAFI_API_BASE || VELAFI_API_BASE_DEFAULT;
+  const qs = new URLSearchParams({ orderId, orderType });
+  const velafiRes = await fetch(${velafiBase}/v2/order/detail?${qs.toString()}, {
+    headers: velafiHeaders(env),
+  });
+  const velafiData = await safeJson(velafiRes);
+
+  if (!velafiRes.ok) {
+    return jsonResponse({ error: "velafi_error", details: velafiData }, velafiRes.status);
+  }
+
+  return jsonResponse({ ok: true, order: velafiData });
+}
+
+/* ------------------------------------------------------------------ */
 /*  2b. Prefill KYB data for a Business customer (optional; Noah still */
 /*      requires the Hosted Onboarding session above for T&Cs).        */
 /* ------------------------------------------------------------------ */
@@ -394,7 +664,7 @@ async function handleBusinessPrefill(request, env) {
   const body = await request.json().catch(() => ({}));
   const required = ["companyName", "registrationCountry", "registrationNumber", "entityType"];
   for (const f of required) {
-    if (!body[f]) return jsonResponse({ error: "missing_fields", message: `${f} is required` }, 400);
+    if (!body[f]) return jsonResponse({ error: "missing_fields", message: ${f} is required }, 400);
   }
 
   const noahBase = env.NOAH_API_BASE || NOAH_API_BASE_DEFAULT;
@@ -412,7 +682,7 @@ async function handleBusinessPrefill(request, env) {
   if (body.website) payload.PrimaryWebsite = body.website;
   if (body.legalAddress) payload.LegalAddress = body.legalAddress;
 
-  const noahRes = await fetch(`${noahBase}/onboarding/${encodeURIComponent(noahCustomerId)}/prefill`, {
+  const noahRes = await fetch(${noahBase}/onboarding/${encodeURIComponent(noahCustomerId)}/prefill, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Api-Key": env.NOAH_API_KEY },
     body: JSON.stringify(payload),
@@ -440,7 +710,7 @@ async function handleSignup(request, env) {
   }
 
   const normalizedEmail = email.trim().toLowerCase();
-  const existing = await env.DIGIPAGOS_CUSTOMERS.get(`merchant:${normalizedEmail}`);
+  const existing = await env.DIGIPAGOS_CUSTOMERS.get(merchant:${normalizedEmail});
   if (existing) {
     return jsonResponse({ error: "already_exists", message: "An account with this email already exists" }, 409);
   }
@@ -448,7 +718,7 @@ async function handleSignup(request, env) {
   const { hash, salt } = await hashPassword(password);
 
   await env.DIGIPAGOS_CUSTOMERS.put(
-    `merchant:${normalizedEmail}`,
+    merchant:${normalizedEmail},
     JSON.stringify({
       email: normalizedEmail,
       passwordHash: hash,
@@ -471,7 +741,7 @@ async function handleLogin(request, env) {
   }
 
   const normalizedEmail = email.trim().toLowerCase();
-  const record = await env.DIGIPAGOS_CUSTOMERS.get(`merchant:${normalizedEmail}`);
+  const record = await env.DIGIPAGOS_CUSTOMERS.get(merchant:${normalizedEmail});
   if (!record) {
     return jsonResponse({ error: "invalid_credentials" }, 401);
   }
@@ -490,6 +760,144 @@ function handleLogout() {
   return jsonResponse({ ok: true }, 200, {
     "Set-Cookie": "digipagos_session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0",
   });
+}
+
+/* ------------------------------------------------------------------ */
+/*  0c-bis. Forgot / reset password                                    */
+/*                                                                      */
+/*  Reset tokens are single-use, expire in 30 minutes, and are stored  */
+/*  in KV keyed by a SHA-256 hash of the token (never the raw token)   */
+/*  so a KV dump alone can't be used to take over an account. The      */
+/*  forgot-password response is identical whether or not the email     */
+/*  exists, to avoid leaking which emails have accounts.                */
+/* ------------------------------------------------------------------ */
+const RESET_TOKEN_TTL_SECONDS = 30 * 60;
+
+async function handleForgotPassword(request, env) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    body = {};
+  }
+  const email = (body.email || "").trim().toLowerCase();
+  const generic = { ok: true, message: "If an account exists for that email, a reset link has been sent." };
+
+  if (!email) {
+    return jsonResponse(generic, 200);
+  }
+
+  const record = await env.DIGIPAGOS_CUSTOMERS.get(merchant:${email});
+  if (!record) {
+    // Don't reveal whether the account exists.
+    return jsonResponse(generic, 200);
+  }
+
+  const tokenBytes = crypto.getRandomValues(new Uint8Array(32));
+  const token = bytesToBase64Url(tokenBytes);
+  const tokenHash = await sha256Hex(token);
+
+  await env.DIGIPAGOS_CUSTOMERS.put(
+    reset:${tokenHash},
+    JSON.stringify({ email, createdAt: new Date().toISOString() }),
+    { expirationTtl: RESET_TOKEN_TTL_SECONDS }
+  );
+
+  const resetUrl = https://digipagos.io/reset-password.html?token=${encodeURIComponent(token)};
+
+  if (env.RESEND_API_KEY) {
+    try {
+      await sendResetEmail(env, email, resetUrl);
+    } catch (err) {
+      // Never leak whether sending failed to the client, and never log the
+      // raw email/token — a hash is enough to trace an incident in KV.
+      console.log("Password reset email failed to send:", { emailHash: await sha256Hex(email) });
+    }
+  } else {
+    // No email provider configured yet. Log a hash only (never the raw
+    // email or token) so this is visible in tail logs without storing PII.
+    console.log(
+      "Password reset requested but RESEND_API_KEY is not set — no email sent.",
+      { emailHash: await sha256Hex(email) }
+    );
+  }
+
+  return jsonResponse(generic, 200);
+}
+
+async function handleResetPassword(request, env) {
+  const { token, password } = await request.json();
+  if (!token || !password || password.length < 8) {
+    return jsonResponse(
+      { error: "invalid_input", message: "token and a new password (8+ chars) are required" },
+      400
+    );
+  }
+
+  const tokenHash = await sha256Hex(token);
+  const raw = await env.DIGIPAGOS_CUSTOMERS.get(reset:${tokenHash});
+  if (!raw) {
+    return jsonResponse({ error: "invalid_or_expired_token" }, 400);
+  }
+
+  const { email } = JSON.parse(raw);
+  const merchantKey = merchant:${email};
+  const merchantRaw = await env.DIGIPAGOS_CUSTOMERS.get(merchantKey);
+  if (!merchantRaw) {
+    await env.DIGIPAGOS_CUSTOMERS.delete(reset:${tokenHash});
+    return jsonResponse({ error: "invalid_or_expired_token" }, 400);
+  }
+
+  const merchant = JSON.parse(merchantRaw);
+  const { hash, salt } = await hashPassword(password);
+  merchant.passwordHash = hash;
+  merchant.passwordSalt = salt;
+  merchant.passwordResetAt = new Date().toISOString();
+
+  await env.DIGIPAGOS_CUSTOMERS.put(merchantKey, JSON.stringify(merchant));
+  // Single-use: burn the token immediately so it can't be replayed.
+  await env.DIGIPAGOS_CUSTOMERS.delete(reset:${tokenHash});
+
+  const sessionToken = await createSessionToken(email, env.AUTH_SECRET);
+  return jsonResponse({ ok: true, email }, 200, sessionCookieHeader(sessionToken));
+}
+
+async function sendResetEmail(env, email, resetUrl) {
+  const fromAddress = env.RESEND_FROM_EMAIL || "DigiPagos <support@digipagos.io>";
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: Bearer ${env.RESEND_API_KEY},
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      from: fromAddress,
+      to: email,
+      subject: "Reset your DigiPagos password",
+      html: `
+        <p>We received a request to reset your DigiPagos password.</p>
+        <p><a href="${resetUrl}">Click here to choose a new password</a> (this link expires in 30 minutes).</p>
+        <p>If you didn't request this, you can safely ignore this email.</p>
+      `,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(Resend responded ${res.status});
+  }
+}
+
+async function sha256Hex(input) {
+  const bytes = new TextEncoder().encode(input);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function bytesToBase64Url(bytes) {
+  let binary = "";
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 /* ------------------------------------------------------------------ */
@@ -550,7 +958,7 @@ async function handleCreatePayment(request, env) {
         ExternalID: externalId,
         CustomerID: noahCustomerId,
         LineItems: [
-          { Description: `Payment to ${email}`, Quantity: "1", UnitAmount: amountStr, TotalAmount: amountStr },
+          { Description: Payment to ${email}, Quantity: "1", UnitAmount: amountStr, TotalAmount: amountStr },
         ],
         Nonce: crypto.randomUUID(),
       }
@@ -562,11 +970,11 @@ async function handleCreatePayment(request, env) {
         ExternalID: externalId,
         Nonce: crypto.randomUUID(),
         LineItems: [
-          { Description: `Payment to ${email}`, Quantity: "1", UnitAmount: amountStr, TotalAmount: amountStr },
+          { Description: Payment to ${email}, Quantity: "1", UnitAmount: amountStr, TotalAmount: amountStr },
         ],
       };
 
-  const noahRes = await fetch(`${noahBase}${endpoint}`, {
+  const noahRes = await fetch(${noahBase}${endpoint}, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -582,7 +990,7 @@ async function handleCreatePayment(request, env) {
   }
 
   await env.DIGIPAGOS_CUSTOMERS.put(
-    `merchant-tx:${noahCustomerId}:${externalId}`,
+    merchant-tx:${noahCustomerId}:${externalId},
     JSON.stringify({
       externalId,
       direction: "in",
@@ -640,7 +1048,7 @@ async function handleCreatePayout(request, env) {
     CustomerID: noahCustomerId,
     LineItems: [
       {
-        Description: `Payout for ${email}`,
+        Description: Payout for ${email},
         Quantity: "1",
         UnitAmount: amountStr,
         TotalAmount: amountStr,
@@ -649,7 +1057,7 @@ async function handleCreatePayout(request, env) {
     Nonce: crypto.randomUUID(),
   };
 
-  const noahRes = await fetch(`${noahBase}/checkout/payout/fiat`, {
+  const noahRes = await fetch(${noahBase}/checkout/payout/fiat, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -665,7 +1073,7 @@ async function handleCreatePayout(request, env) {
   }
 
   await env.DIGIPAGOS_CUSTOMERS.put(
-    `merchant-tx:${noahCustomerId}:${externalId}`,
+    merchant-tx:${noahCustomerId}:${externalId},
     JSON.stringify({
       externalId,
       direction: "out",
@@ -699,7 +1107,7 @@ async function handleGetBalance(request, env) {
   }
 
   const noahCustomerId = toNoahCustomerId(email);
-  const list = await env.DIGIPAGOS_CUSTOMERS.list({ prefix: `merchant-tx:${noahCustomerId}:` });
+  const list = await env.DIGIPAGOS_CUSTOMERS.list({ prefix: merchant-tx:${noahCustomerId}: });
   const records = await Promise.all(
     list.keys.map(async (k) => {
       const val = await env.DIGIPAGOS_CUSTOMERS.get(k.name);
@@ -707,12 +1115,14 @@ async function handleGetBalance(request, env) {
     })
   );
 
-  // Confirm the real completed-status string in sandbox webhook logs.
-  const SETTLED = ["settled", "completed"];
+  // Noah confirmed: a Transaction's Status is exactly one of Pending,
+  // Failed, Settled. "Completed" is a value of the separate RFI.Status
+  // field and can appear while the transaction itself is still Pending —
+  // it must never be treated as settled here.
   let balance = 0;
   const byCurrency = {};
   for (const r of records) {
-    if (!r || !SETTLED.includes(String(r.status).toLowerCase())) continue;
+    if (!r || String(r.status).toLowerCase() !== "settled") continue;
     // Bank deposits go straight to the merchant's own wallet, and records
     // without our own amount/direction can't be summed.
     if (r.kind === "bank-deposit") continue;
@@ -745,7 +1155,7 @@ async function handleListTransactions(request, env) {
   }
 
   const noahCustomerId = toNoahCustomerId(email);
-  const list = await env.DIGIPAGOS_CUSTOMERS.list({ prefix: `merchant-tx:${noahCustomerId}:` });
+  const list = await env.DIGIPAGOS_CUSTOMERS.list({ prefix: merchant-tx:${noahCustomerId}: });
   const transactions = await Promise.all(
     list.keys.map(async (k) => {
       const val = await env.DIGIPAGOS_CUSTOMERS.get(k.name);
@@ -769,6 +1179,165 @@ async function handleListTransactions(request, env) {
     transactions: mapped,
     custody: NONCUSTODIAL.model,
     note: "Statuses are recorded from Noah webhooks. DigiPagos displays them only.",
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/*  6d. Internal master dashboard (Daniel-only): every merchant and the */
+/*      settled volume they've moved, aggregated from the same KV data  */
+/*      the merchant-facing dashboard already reads. Gated by a single  */
+/*      ADMIN_KEY secret (env.ADMIN_KEY) — not a merchant login — kept   */
+/*      in its own signed cookie (digipagos_admin_session) so a         */
+/*      merchant session can never pass as an admin session.            */
+/*                                                                       */
+/*  Reads every merchant:* key via KV.list(), so it's an MVP fit for  */
+/*  the current handful of sandbox merchants. If the merchant count     */
+/*  grows into the hundreds, replace the per-key KV.get() fan-out below */
+/*  with a proper index or a small D1/database table.                   */
+/* ------------------------------------------------------------------ */
+function adminSessionCookieHeader(token) {
+  return {
+    "Set-Cookie": digipagos_admin_session=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=43200,
+  };
+}
+
+async function getAdminSession(request, env) {
+  const cookieHeader = request.headers.get("Cookie") || "";
+  const match = cookieHeader.match(/digipagos_admin_session=([^;]+)/);
+  if (!match) return false;
+  const subject = await verifySessionToken(match[1], env.AUTH_SECRET);
+  return subject === "admin";
+}
+
+async function handleAdminLogin(request, env) {
+  if (!env.ADMIN_KEY) {
+    return jsonResponse(
+      { error: "admin_not_configured", message: "Set ADMIN_KEY as a Worker secret to enable the master dashboard." },
+      501
+    );
+  }
+
+  const { adminKey } = await request.json().catch(() => ({}));
+  if (!adminKey || !timingSafeEqual(String(adminKey), String(env.ADMIN_KEY))) {
+    return jsonResponse({ error: "invalid_credentials" }, 401);
+  }
+
+  // 12-hour admin session, shorter-lived than a merchant session on purpose.
+  const token = await createSessionToken("admin", env.AUTH_SECRET);
+  return jsonResponse({ ok: true }, 200, adminSessionCookieHeader(token));
+}
+
+function handleAdminLogout() {
+  return jsonResponse({ ok: true }, 200, {
+    "Set-Cookie": "digipagos_admin_session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0",
+  });
+}
+
+async function handleAdminOverview(request, env) {
+  const isAdmin = await getAdminSession(request, env);
+  if (!isAdmin) {
+    return jsonResponse({ error: "not_authenticated" }, 401);
+  }
+
+  const merchantList = await env.DIGIPAGOS_CUSTOMERS.list({ prefix: "merchant:" });
+  const merchants = await Promise.all(
+    merchantList.keys.map(async (k) => {
+      const raw = await env.DIGIPAGOS_CUSTOMERS.get(k.name);
+      if (!raw) return null;
+      const merchant = JSON.parse(raw);
+      const noahCustomerId = toNoahCustomerId(merchant.email);
+
+      const [customerRaw, txList] = await Promise.all([
+        env.DIGIPAGOS_CUSTOMERS.get(customer:${noahCustomerId}),
+        env.DIGIPAGOS_CUSTOMERS.list({ prefix: merchant-tx:${noahCustomerId}: }),
+      ]);
+      const customer = customerRaw ? JSON.parse(customerRaw) : null;
+
+      const txRecords = (
+        await Promise.all(txList.keys.map((tk) => env.DIGIPAGOS_CUSTOMERS.get(tk.name)))
+      )
+        .filter(Boolean)
+        .map((v) => JSON.parse(v));
+
+      // Only "Settled" is a fully settled transaction status (see the note
+      // in handleGetBalance) — "Completed" is an RFI.Status value, not a
+      // transaction status, and must never be counted as settled volume here.
+      const volumeByCurrency = {};
+      let settledCount = 0;
+      let pendingCount = 0;
+      let failedCount = 0;
+      let lastActivity = null;
+
+      for (const tx of txRecords) {
+        const status = String(tx.status || "").toLowerCase();
+        if (status === "settled") {
+          settledCount++;
+          const cur = tx.currency || "USD";
+          const amt = Number(tx.amount) || 0;
+          volumeByCurrency[cur] = (volumeByCurrency[cur] || 0) + amt;
+        } else if (status === "failed") {
+          failedCount++;
+        } else {
+          pendingCount++;
+        }
+        const ts = tx.updatedAt || tx.createdAt;
+        if (ts && (!lastActivity || ts > lastActivity)) lastActivity = ts;
+      }
+
+      return {
+        email: merchant.email,
+        noahCustomerId,
+        createdAt: merchant.createdAt || null,
+        verificationStatus: customer?.verificationStatus || "NotStarted",
+        accountType: customer?.accountType || null,
+        transactionCount: txRecords.length,
+        settledCount,
+        pendingCount,
+        failedCount,
+        volumeByCurrency,
+        lastActivity,
+      };
+    })
+  );
+
+  const rows = merchants.filter(Boolean).sort((a, b) => String(b.lastActivity || b.createdAt || "").localeCompare(String(a.lastActivity || a.createdAt || "")));
+
+  const totals = { merchantCount: rows.length, volumeByCurrency: {} };
+  for (const r of rows) {
+    for (const [cur, amt] of Object.entries(r.volumeByCurrency)) {
+      totals.volumeByCurrency[cur] = (totals.volumeByCurrency[cur] || 0) + amt;
+    }
+  }
+
+  return jsonResponse({ ok: true, merchants: rows, totals });
+}
+
+async function handleAdminMerchantDetail(request, env, noahCustomerId) {
+  const isAdmin = await getAdminSession(request, env);
+  if (!isAdmin) {
+    return jsonResponse({ error: "not_authenticated" }, 401);
+  }
+
+  const id = decodeURIComponent(noahCustomerId || "");
+  if (!id) return jsonResponse({ error: "invalid_input" }, 400);
+
+  const [customerRaw, txList] = await Promise.all([
+    env.DIGIPAGOS_CUSTOMERS.get(customer:${id}),
+    env.DIGIPAGOS_CUSTOMERS.list({ prefix: merchant-tx:${id}: }),
+  ]);
+
+  const transactions = (
+    await Promise.all(txList.keys.map((tk) => env.DIGIPAGOS_CUSTOMERS.get(tk.name)))
+  )
+    .filter(Boolean)
+    .map((v) => JSON.parse(v))
+    .sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")));
+
+  return jsonResponse({
+    ok: true,
+    noahCustomerId: id,
+    customer: customerRaw ? JSON.parse(customerRaw) : null,
+    transactions,
   });
 }
 
@@ -816,7 +1385,7 @@ async function handleCreateVirtualAccount(request, env) {
     DestinationAddress: { Address: address },
   };
 
-  const noahRes = await fetch(`${noahBase}/workflows/bank-deposit-to-onchain-address`, {
+  const noahRes = await fetch(${noahBase}/workflows/bank-deposit-to-onchain-address, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Api-Key": env.NOAH_API_KEY },
     body: JSON.stringify(payload),
@@ -831,7 +1400,7 @@ async function handleCreateVirtualAccount(request, env) {
   // from Noah when shown (Noah recommends not caching them).
   if (noahData.VirtualAccountID) {
     await env.DIGIPAGOS_CUSTOMERS.put(
-      `va:${noahCustomerId}:${noahData.VirtualAccountID}`,
+      va:${noahCustomerId}:${noahData.VirtualAccountID},
       JSON.stringify({
         virtualAccountId: noahData.VirtualAccountID,
         network,
@@ -854,7 +1423,7 @@ async function handleCreateVirtualAccount(request, env) {
 async function fetchNoahVirtualAccounts(env, noahCustomerId) {
   const noahBase = env.NOAH_API_BASE || NOAH_API_BASE_DEFAULT;
   const res = await fetch(
-    `${noahBase}/virtual-accounts?CustomerID=${encodeURIComponent(noahCustomerId)}&PageSize=50`,
+    ${noahBase}/virtual-accounts?CustomerID=${encodeURIComponent(noahCustomerId)}&PageSize=50,
     { headers: { "X-Api-Key": env.NOAH_API_KEY } }
   );
   const data = await safeJson(res);
@@ -876,7 +1445,7 @@ async function handleListVirtualAccounts(request, env) {
 
   const items = await Promise.all(
     (data.Items || []).map(async (it) => {
-      const raw = await env.DIGIPAGOS_CUSTOMERS.get(`va:${noahCustomerId}:${it.VirtualAccountID}`);
+      const raw = await env.DIGIPAGOS_CUSTOMERS.get(va:${noahCustomerId}:${it.VirtualAccountID});
       return { ...it, destination: raw ? JSON.parse(raw) : null };
     })
   );
@@ -915,7 +1484,7 @@ async function handleSimulateDeposit(request, env) {
   }
 
   const noahBase = env.NOAH_API_BASE || NOAH_API_BASE_DEFAULT;
-  const noahRes = await fetch(`${noahBase}/sandbox/fiat-deposit/simulate`, {
+  const noahRes = await fetch(${noahBase}/sandbox/fiat-deposit/simulate, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Api-Key": env.NOAH_API_KEY },
     body: JSON.stringify({
@@ -930,6 +1499,50 @@ async function handleSimulateDeposit(request, env) {
     return jsonResponse({ error: "noah_error", details: noahData, message: formatNoahError(noahData) }, noahRes.status);
   }
   return jsonResponse({ ok: true, result: noahData });
+}
+
+// Reduces a Noah webhook event to the fields useful for debugging, without
+// the PII Noah includes on Customer events (FullName, DateOfBirth,
+// Identities, PrimaryResidence, Agreements). Never log the raw event.
+function summarizeWebhookEvent(event) {
+  const d = event?.Data || {};
+  const base = {
+    EventType: event?.EventType,
+    EventVersion: event?.EventVersion,
+    Occurred: event?.Occurred,
+    CustomerID: d.CustomerID || d.ID,
+  };
+  if (event?.EventType === "Customer") {
+    return {
+      ...base,
+      Type: d.Type,
+      VerificationStatus: d.Verifications?.Status,
+    };
+  }
+  if (event?.EventType === "Transaction") {
+    return {
+      ...base,
+      TransactionID: d.ID,
+      Direction: d.Direction,
+      Status: d.Status,
+      SubStatus: d.SubStatus,
+      CryptoCurrency: d.CryptoCurrency,
+      Amount: d.Amount,
+      Network: d.Network,
+    };
+  }
+  if (event?.EventType === "FiatDeposit") {
+    return {
+      ...base,
+      DepositID: d.ID,
+      Status: d.Status,
+      SubStatus: d.SubStatus,
+      FiatCurrency: d.FiatCurrency,
+      FiatAmount: d.FiatAmount,
+      PaymentMethodType: d.PaymentMethodType,
+    };
+  }
+  return base;
 }
 
 async function handleNoahWebhook(request, env) {
@@ -961,10 +1574,13 @@ async function handleNoahWebhook(request, env) {
     return jsonResponse({ error: "invalid_json" }, 400);
   }
 
-  console.log("Noah webhook received:", JSON.stringify(event));
+  // Log a redacted summary only. The raw payload carries PII (full name,
+  // date of birth, government ID, home address) that must never sit in
+  // plaintext logs once real customers are onboarding.
+  console.log("Noah webhook received:", JSON.stringify(summarizeWebhookEvent(event)));
 
   if (event?.EventType === "Customer" && event?.Data?.CustomerID) {
-    const key = `customer:${event.Data.CustomerID}`;
+    const key = customer:${event.Data.CustomerID};
     await env.DIGIPAGOS_CUSTOMERS.put(
       key,
       JSON.stringify({
@@ -979,7 +1595,7 @@ async function handleNoahWebhook(request, env) {
   if (event?.EventType === "FiatDeposit" && event?.Data?.ID) {
     const d = event.Data;
     if (d.CustomerID) {
-      const key = `merchant-tx:${d.CustomerID}:dep-${d.ID}`;
+      const key = merchant-tx:${d.CustomerID}:dep-${d.ID};
       const existingRaw = await env.DIGIPAGOS_CUSTOMERS.get(key);
       const existing = existingRaw ? JSON.parse(existingRaw) : {};
       const stale = existing.eventVersion && event.EventVersion && event.EventVersion < existing.eventVersion;
@@ -988,7 +1604,7 @@ async function handleNoahWebhook(request, env) {
           key,
           JSON.stringify({
             ...existing,
-            externalId: `dep-${d.ID}`,
+            externalId: dep-${d.ID},
             kind: "bank-deposit",
             direction: "in",
             amount: Number(d.FiatAmount),
@@ -1017,7 +1633,7 @@ async function handleNoahWebhook(request, env) {
     const status = event.Data.Status || "Unknown";
 
     if (noahCustomerId && externalId) {
-      const key = `merchant-tx:${noahCustomerId}:${externalId}`;
+      const key = merchant-tx:${noahCustomerId}:${externalId};
       const existingRaw = await env.DIGIPAGOS_CUSTOMERS.get(key);
       const existing = existingRaw ? JSON.parse(existingRaw) : {};
       await env.DIGIPAGOS_CUSTOMERS.put(
@@ -1034,7 +1650,7 @@ async function handleNoahWebhook(request, env) {
       );
     } else if (noahCustomerId && transactionId) {
       await env.DIGIPAGOS_CUSTOMERS.put(
-        `merchant-tx:${noahCustomerId}:${transactionId}`,
+        merchant-tx:${noahCustomerId}:${transactionId},
         JSON.stringify({
           transactionId,
           status,
@@ -1062,7 +1678,7 @@ async function handleGetCustomerStatus(request, env) {
   }
 
   // Session email only; any ?id= in the URL is ignored.
-  const record = await env.DIGIPAGOS_CUSTOMERS.get(`customer:${toNoahCustomerId(email)}`);
+  const record = await env.DIGIPAGOS_CUSTOMERS.get(customer:${toNoahCustomerId(email)});
   if (!record) {
     return jsonResponse({ error: "not_found" }, 404);
   }
@@ -1100,7 +1716,7 @@ function jsonResponse(obj, status = 200, extraHeaders = {}) {
 
 function sessionCookieHeader(token) {
   return {
-    "Set-Cookie": `digipagos_session=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=604800`,
+    "Set-Cookie": digipagos_session=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=604800,
   };
 }
 
@@ -1133,167 +1749,4 @@ async function pbkdf2(password, salt) {
 }
 
 function bytesToBase64(bytes) {
-  let binary = "";
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary);
-}
-
-async function createSessionToken(email, secret) {
-  const expiry = Date.now() + 7 * 24 * 60 * 60 * 1000;
-  const payload = `${email}.${expiry}`;
-  const signature = await hmacSign(payload, secret);
-  return `${btoa(payload)}.${signature}`;
-}
-
-async function verifySessionToken(token, secret) {
-  try {
-    const [payloadB64, signature] = token.split(".");
-    const payload = atob(payloadB64);
-    const expectedSignature = await hmacSign(payload, secret);
-    if (!timingSafeEqual(signature, expectedSignature)) return null;
-
-    // Payload is "<email>.<expiry>". The email itself contains dots, so split
-    // on the LAST dot only.
-    const lastDot = payload.lastIndexOf(".");
-    if (lastDot === -1) return null;
-    const email = payload.slice(0, lastDot);
-    const expiry = Number(payload.slice(lastDot + 1));
-    if (!Number.isFinite(expiry) || Date.now() > expiry) return null;
-
-    return email;
-  } catch {
-    return null;
-  }
-}
-
-function timingSafeEqual(a, b) {
-  if (typeof a !== "string" || typeof b !== "string" || a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
-}
-
-async function hmacSign(message, secret) {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-  const sigBytes = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message));
-  return bytesToBase64(new Uint8Array(sigBytes));
-}
-
-async function getSessionEmail(request, env) {
-  const cookieHeader = request.headers.get("Cookie") || "";
-  const match = cookieHeader.match(/digipagos_session=([^;]+)/);
-  if (!match) return null;
-  return await verifySessionToken(match[1], env.AUTH_SECRET);
-}
-
-function corsResponse() {
-  return new Response(null, {
-    status: 204,
-    headers: {
-      "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
-      "Access-Control-Allow-Credentials": "true",
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
-      "Vary": "Origin",
-    },
-  });
-}
-
-async function verifyNoahSignature(rawBody, signatureHeaderB64, publicKeyPem) {
-  try {
-    const keyData = pemToArrayBuffer(publicKeyPem);
-    const publicKey = await crypto.subtle.importKey(
-      "spki",
-      keyData,
-      { name: "ECDSA", namedCurve: "P-384" },
-      false,
-      ["verify"]
-    );
-
-    const derSignature = base64ToBytes(signatureHeaderB64);
-    const rawSignature = derToRawEcdsaSignature(derSignature, 48);
-
-    const bodyBytes = new TextEncoder().encode(rawBody);
-
-    return await crypto.subtle.verify(
-      { name: "ECDSA", hash: "SHA-384" },
-      publicKey,
-      rawSignature,
-      bodyBytes
-    );
-  } catch (err) {
-    console.error("Signature verification error:", err);
-    return false;
-  }
-}
-
-function pemToArrayBuffer(pem) {
-  const b64 = pem
-    .replace(/-----BEGIN PUBLIC KEY-----/, "")
-    .replace(/-----END PUBLIC KEY-----/, "")
-    .replace(/\s+/g, "");
-  return base64ToBytes(b64).buffer;
-}
-
-function base64ToBytes(b64) {
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
-
-function derToRawEcdsaSignature(der, componentSize) {
-  let offset = 0;
-  if (der[offset++] !== 0x30) throw new Error("Invalid DER signature (no SEQUENCE)");
-
-  let seqLen = der[offset++];
-  if (seqLen & 0x80) {
-    offset += seqLen & 0x7f;
-  }
-
-  function readInt() {
-    if (der[offset++] !== 0x02) throw new Error("Invalid DER signature (no INTEGER)");
-    let len = der[offset++];
-    let bytes = der.slice(offset, offset + len);
-    offset += len;
-    while (bytes.length > 1 && bytes[0] === 0) bytes = bytes.slice(1);
-    return bytes;
-  }
-
-  const r = readInt();
-  const s = readInt();
-
-  function pad(bytes) {
-    const out = new Uint8Array(componentSize);
-    out.set(bytes, componentSize - bytes.length);
-    return out;
-  }
-
-  const raw = new Uint8Array(componentSize * 2);
-  raw.set(pad(r), 0);
-  raw.set(pad(s), componentSize);
-  return raw;
-}
-
-async function safeJson(res) {
-  try {
-    return await res.json();
-  } catch {
-    return null;
-  }
-}
-
-class response404 extends Response {
-  constructor() {
-    super(JSON.stringify({ error: "not_found" }), {
-      status: 404,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
-}
+  let binary = "
