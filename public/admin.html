@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Admin | DigiPagos</title>
+<style>
+  :root { --cyan:#00ADDE; --black:#0A0A0A; --gray:#5A5A5A; --light-gray:#F4F7F9; --line:#E2E8EC; --ok:#1E8E5A; --ok-bg:#E7F6EE; --warn:#B7791F; --warn-bg:#FFF6E5; --bad:#C0392B; --bad-bg:#FBEAE8; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; background:var(--light-gray); color:var(--black); }
+  header { background:var(--black); padding:16px 24px; display:flex; align-items:center; justify-content:space-between; }
+  header img { height:30px; }
+  header .tag { color:#9AA7B0; font-size:0.8rem; }
+  header button { background:transparent; border:1px solid #333; color:#ccc; border-radius:6px; padding:6px 12px; font-size:0.8rem; cursor:pointer; }
+  main { max-width:1100px; margin:0 auto; padding:28px 20px 60px; }
+
+  /* --- Login gate --- */
+  #login-view { max-width:360px; margin:80px auto; }
+  #login-view .card { background:#fff; border-radius:10px; box-shadow:0 1px 4px rgba(0,0,0,0.08); padding:30px; }
+  #login-view h1 { font-size:1.2rem; margin:0 0 18px; text-align:center; }
+  #login-view input { width:100%; padding:10px 12px; border:1px solid #D5DCE1; border-radius:6px; font-size:1rem; margin-bottom:14px; }
+  #login-view button { width:100%; padding:11px; background:var(--black); color:#fff; border:none; border-radius:6px; font-size:1rem; cursor:pointer; }
+  #login-err { color:var(--bad); font-size:0.85rem; margin-bottom:10px; display:none; }
+
+  /* --- Overview --- */
+  #app-view { display:none; }
+  .stats { display:flex; gap:14px; flex-wrap:wrap; margin-bottom:22px; }
+  .stat { background:#fff; border-radius:10px; box-shadow:0 1px 4px rgba(0,0,0,0.06); padding:16px 20px; min-width:150px; flex:1; }
+  .stat .label { font-size:0.78rem; color:var(--gray); margin-bottom:4px; }
+  .stat .value { font-size:1.4rem; font-weight:600; }
+
+  table { width:100%; border-collapse:collapse; background:#fff; border-radius:10px; overflow:hidden; box-shadow:0 1px 4px rgba(0,0,0,0.06); }
+  th, td { text-align:left; padding:12px 14px; font-size:0.88rem; border-bottom:1px solid var(--line); }
+  th { color:var(--gray); font-weight:600; font-size:0.78rem; text-transform:uppercase; letter-spacing:0.03em; }
+  tr:last-child td { border-bottom:none; }
+  tr.merchant-row { cursor:pointer; }
+  tr.merchant-row:hover { background:#FAFCFD; }
+  .badge { display:inline-block; padding:3px 9px; border-radius:20px; font-size:0.72rem; font-weight:600; }
+  .b-ok { background:var(--ok-bg); color:var(--ok); }
+  .b-warn { background:var(--warn-bg); color:var(--warn); }
+  .b-bad { background:var(--bad-bg); color:var(--bad); }
+  .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:0.82rem; }
+  .empty { text-align:center; color:var(--gray); padding:40px 0; }
+  .refresh { font-size:0.8rem; color:var(--cyan); cursor:pointer; background:none; border:none; padding:0; margin-left:10px; }
+  .toolbar { display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; }
+  .toolbar h2 { margin:0; font-size:1.1rem; }
+  input#search { padding:8px 12px; border:1px solid #D5DCE1; border-radius:6px; font-size:0.88rem; width:220px; }
+
+  /* --- Detail drawer --- */
+  #detail-view { display:none; }
+  .back-link { display:inline-block; margin-bottom:14px; color:var(--cyan); text-decoration:none; font-size:0.9rem; cursor:pointer; }
+</style>
+</head>
+<body>
+
+<header>
+  <div style="display:flex;align-items:center;gap:10px">
+    <img src="/assets/logo.png" alt="DigiPagos" />
+    <span class="tag">Admin</span>
+  </div>
+  <button id="logout-btn" style="display:none">Log out</button>
+</header>
+
+<main>
+  <div id="login-view">
+    <div class="card">
+      <h1>Master dashboard</h1>
+      <p id="login-err"></p>
+      <form id="login-form">
+        <input type="password" id="admin-key" placeholder="Admin key" autocomplete="off" required />
+        <button type="submit" id="login-submit">Enter</button>
+      </form>
+    </div>
+  </div>
+
+  <div id="app-view">
+    <div id="overview-view">
+      <div class="stats" id="stats"></div>
+      <div class="toolbar">
+        <h2>Merchants</h2>
+        <div><input id="search" placeholder="Search by email..." /><button class="refresh" id="refresh-btn">Refresh</button></div>
+      </div>
+      <div id="table-wrap"></div>
+    </div>
+
+    <div id="detail-view">
+      <a class="back-link" id="back-link">&larr; Back to all merchants</a>
+      <div id="detail-content"></div>
+    </div>
+  </div>
+</main>
+
+<script>
+  var $ = function (s) { return document.querySelector(s); };
+  var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  }); };
+  var fmtMoney = function (amt, cur) {
+    var n = Number(amt) || 0;
+    return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " " + (cur || "USD");
+  };
+  var fmtDate = function (iso) {
+    if (!iso) return "—";
+    try { return new Date(iso).toLocaleString(); } catch (e) { return iso; }
+  };
+  var verifBadge = function (status) {
+    var s = String(status || "NotStarted");
+    var cls = s === "Approved" ? "b-ok" : (s === "Rejected" || s === "Failed") ? "b-bad" : "b-warn";
+    return '<span class="badge ' + cls + '">' + esc(s) + "</span>";
+  };
+
+  async function api(path, opts) {
+    opts = opts || {};
+    var res = await fetch(path, Object.assign({ credentials: "include", headers: { "Content-Type": "application/json" } }, opts));
+    var data = await res.json().catch(function () { return {}; });
+    if (!res.ok) throw new Error(data.message || data.error || "Request failed");
+    return data;
+  }
+
+  var state = { merchants: [] };
+
+  function showLogin() {
+    $("#login-view").style.display = "block";
+    $("#app-view").style.display = "none";
+    $("#logout-btn").style.display = "none";
+  }
+
+  function showApp() {
+    $("#login-view").style.display = "none";
+    $("#app-view").style.display = "block";
+    $("#logout-btn").style.display = "inline-block";
+    $("#overview-view").style.display = "block";
+    $("#detail-view").style.display = "none";
+  }
+
+  function renderStats(totals) {
+    var cur = Object.keys(totals.volumeByCurrency || {});
+    var vol = cur.length ? cur.map(function (c) { return fmtMoney(totals.volumeByCurrency[c], c); }).join(" · ") : fmtMoney(0, "USD");
+    $("#stats").innerHTML =
+      '<div class="stat"><div class="label">Merchants</div><div class="value">' + totals.merchantCount + "</div></div>" +
+      '<div class="stat"><div class="label">Settled volume</div><div class="value">' + esc(vol) + "</div></div>";
+  }
+
+  function renderTable(merchants) {
+    if (!merchants.length) {
+      $("#table-wrap").innerHTML = '<div class="empty">No merchants yet.</div>';
+      return;
+    }
+    var rows = merchants.map(function (m) {
+      var vol = Object.keys(m.volumeByCurrency || {}).length
+        ? Object.entries(m.volumeByCurrency).map(function (e) { return fmtMoney(e[1], e[0]); }).join(", ")
+        : "—";
+      return '<tr class="merchant-row" data-id="' + esc(m.noahCustomerId) + '">' +
+        "<td>" + esc(m.email) + "</td>" +
+        "<td>" + verifBadge(m.verificationStatus) + "</td>" +
+        "<td>" + m.transactionCount + " <span class=\"mono\" style=\"color:var(--gray)\">(" + m.settledCount + " settled)</span></td>" +
+        "<td>" + esc(vol) + "</td>" +
+        "<td>" + fmtDate(m.lastActivity || m.createdAt) + "</td>" +
+        "</tr>";
+    }).join("");
+    $("#table-wrap").innerHTML =
+      "<table><thead><tr><th>Merchant</th><th>Verification</th><th>Transactions</th><th>Settled volume</th><th>Last activity</th></tr></thead><tbody>" +
+      rows + "</tbody></table>";
+
+    document.querySelectorAll(".merchant-row").forEach(function (row) {
+      row.addEventListener("click", function () { openDetail(row.getAttribute("data-id")); });
+    });
+  }
+
+  async function loadOverview() {
+    $("#table-wrap").innerHTML = '<div class="empty">Loading...</div>';
+    try {
+      var data = await api("/api/admin/overview");
+      showApp();
+      state.merchants = data.merchants || [];
+      renderStats(data.totals || { merchantCount: 0, volumeByCurrency: {} });
+      renderTable(state.merchants);
+    } catch (e) {
+      if (String(e.message).match(/not_authenticated|invalid_credentials/i)) { showLogin(); return; }
+      $("#table-wrap").innerHTML = '<div class="empty">' + esc(e.message) + "</div>";
+    }
+  }
+
+  function filterTable() {
+    var q = $("#search").value.trim().toLowerCase();
+    var filtered = !q ? state.merchants : state.merchants.filter(function (m) { return m.email.toLowerCase().indexOf(q) !== -1; });
+    renderTable(filtered);
+  }
+
+  async function openDetail(noahCustomerId) {
+    $("#overview-view").style.display = "none";
+    $("#detail-view").style.display = "block";
+    $("#detail-content").innerHTML = '<div class="empty">Loading...</div>';
+    try {
+      var data = await api("/api/admin/merchant/" + encodeURIComponent(noahCustomerId));
+      var txRows = (data.transactions || []).map(function (t) {
+        var st = String(t.status || "-");
+        var cls = st.toLowerCase() === "settled" ? "b-ok" : st.toLowerCase() === "failed" ? "b-bad" : "b-warn";
+        return "<tr><td>" + fmtDate(t.updatedAt || t.createdAt) + "</td><td>" + esc(t.kind || t.direction || "-") + "</td>" +
+          "<td>" + fmtMoney(t.amount, t.currency) + "</td><td><span class=\"badge " + cls + "\">" + esc(st) + "</span></td></tr>";
+      }).join("");
+      $("#detail-content").innerHTML =
+        "<h2>" + esc(noahCustomerId) + "</h2>" +
+        "<p style=\"color:var(--gray);font-size:0.9rem;margin-bottom:18px\">Verification: " + verifBadge(data.customer && data.customer.verificationStatus) + "</p>" +
+        (txRows
+          ? "<table><thead><tr><th>Date</th><th>Type</th><th>Amount</th><th>Status</th></tr></thead><tbody>" + txRows + "</tbody></table>"
+          : '<div class="empty">No transactions yet.</div>');
+    } catch (e) {
+      $("#detail-content").innerHTML = '<div class="empty">' + esc(e.message) + "</div>";
+    }
+  }
+
+  $("#back-link").addEventListener("click", function () {
+    $("#detail-view").style.display = "none";
+    $("#overview-view").style.display = "block";
+  });
+
+  $("#login-form").addEventListener("submit", async function (e) {
+    e.preventDefault();
+    $("#login-err").style.display = "none";
+    var btn = $("#login-submit"); btn.disabled = true; btn.textContent = "Entering...";
+    try {
+      await api("/api/admin/login", { method: "POST", body: JSON.stringify({ adminKey: $("#admin-key").value }) });
+      loadOverview();
+    } catch (err) {
+      $("#login-err").textContent = err.message || "Invalid admin key.";
+      $("#login-err").style.display = "block";
+    } finally {
+      btn.disabled = false; btn.textContent = "Enter";
+    }
+  });
+
+  $("#logout-btn").addEventListener("click", async function () {
+    await api("/api/admin/logout", { method: "POST" }).catch(function () {});
+    showLogin();
+  });
+
+  $("#refresh-btn").addEventListener("click", loadOverview);
+  $("#search").addEventListener("input", filterTable);
+
+  // On load, try the overview straight away — if there's already a valid
+  // admin session cookie this skips the login screen.
+  loadOverview();
+</script>
+
+</body>
+</html>
